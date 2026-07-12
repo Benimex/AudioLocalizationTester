@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Localization Test</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>7.1 Localization Test</h1>
+  <nav>
+    <button data-view="setup" class="active">Setup</button>
+    <button data-view="probe">Manual Probe</button>
+    <button data-view="panner">Object Panner</button>
+    <button data-view="report">Reports</button>
+  </nav>
+</header>
+
+<!-- SETUP -->
+<section id="setup" class="view active">
+  <h2>Session Setup</h2>
+  <div id="resume-banner" class="banner hidden"></div>
+  <label>Output device
+    <select id="device"></select>
+  </label>
+  <p id="device-warn" class="warn hidden"></p>
+  <label>Participant ID <input id="participant" type="text"></label>
+  <label>Condition label <input id="condition" type="text" placeholder="ROG_APO_v2"></label>
+  <label>Stimulus <select id="stimulus"></select></label>
+  <div class="row">
+    <label>Azimuth step (deg)
+      <select id="step"><option value="30" selected>30 (12 positions)</option>
+        <option value="15">15 (24 positions)</option></select></label>
+    <label>Repetitions <input id="reps" type="number" value="4" min="1" max="20"></label>
+    <label>Peak dBFS <input id="peak" type="number" value="-12" min="-40" max="0" step="1"></label>
+  </div>
+  <p id="duration-est" class="hint"></p>
+  <div class="row">
+    <button id="start-practice">Start Practice (5 trials)</button>
+    <button id="start-main" class="primary">Start Main Session</button>
+  </div>
+</section>
+
+<!-- TRIAL -->
+<section id="trial" class="view">
+  <div class="trial-top">
+    <span id="progress"></span>
+    <span id="mode-badge"></span>
+    <button id="pause" class="ghost">Pause</button>
+  </div>
+  <div id="circle-wrap"></div>
+  <div class="trial-controls">
+    <button id="replay" disabled>Replay (1x)</button>
+    <button id="confirm" class="primary" disabled>Confirm</button>
+  </div>
+  <p id="trial-status" class="hint"></p>
+  <div id="feedback" class="feedback hidden"></div>
+  <div id="paused-overlay" class="overlay hidden"><div>Paused
+    <button id="resume-btn" class="primary">Resume</button></div></div>
+</section>
+
+<!-- PROBE -->
+<section id="probe" class="view">
+  <h2>Manual Probe</h2>
+  <p class="hint">Set an exact azimuth and play. Standalone, not recorded. Same panner as the test.</p>
+  <label>Output device <select id="probe-device"></select></label>
+  <p id="probe-device-warn" class="warn hidden"></p>
+  <div id="probe-circle-wrap"></div>
+  <div class="row">
+    <label>Azimuth (deg) <input id="probe-az" type="number" value="45" min="-180" max="180" step="0.1"></label>
+    <label>Stimulus <select id="probe-stimulus"></select></label>
+    <label>Peak dBFS <input id="probe-peak" type="number" value="-12" min="-40" max="0" step="1"></label>
+  </div>
+  <label class="disabled-field">Elevation (deg)
+    <input id="probe-elev" type="range" min="-90" max="90" value="0" disabled>
+    <span class="hint">Phase 2 only. A 7.1 bed carries no height; elevation needs the Windows
+      Spatial Sound object path (measures the Atmos/Sonic object renderer, not your 7.1 APO).</span>
+  </label>
+  <div class="row">
+    <button id="probe-play" class="primary">Play once</button>
+    <button id="probe-loop">Loop</button>
+    <button id="probe-stop" disabled>Stop</button>
+  </div>
+</section>
+
+<!-- OBJECT PANNER (backend C: HRTF sandbox) -->
+<section id="panner" class="view">
+  <h2>Object Panner (HRTF sandbox)</h2>
+  <p class="hint">放一到多個音源在你周圍, 拖動方位/距離/高度, 即時聽 binaural. 用通用 KEMAR HRTF
+    (參考, 非產品 APO); 立體聲輸出, 不需 7.1. 左右穩, 高度與前後受通用 HRTF 限制.</p>
+  <div class="row">
+    <label>Output device <select id="panner-device"></select></label>
+    <label>Stimulus <select id="panner-stim"></select></label>
+  </div>
+  <div id="wav-player" class="hidden">
+    <canvas id="wav-wave" width="560" height="72"></canvas>
+    <p class="hint">拖兩個藍把手設 A/B 迴圈區間, 播放時只循環這段 (適合長檔剪不動的情況).
+      <span id="wav-times"></span></p>
+  </div>
+  <div class="panner-main">
+    <div>
+      <div id="panner-3d"></div>
+      <p class="hint">拖空白處=旋轉視角, 滾輪=縮放. 拖球=在水平面移動 (方位+距離).
+        高度用右邊 Height 滑桿改. 落地虛線與地板陰影顯示高度.</p>
+    </div>
+    <div class="panner-side">
+      <h3 id="editing-src">Editing source #1</h3>
+      <label>Azimuth (方位): <span id="az-val">0</span>°
+        <input id="panner-az" type="range" min="-180" max="180" value="0"></label>
+      <label>Height (高度): <span id="y-val">0.0</span> m
+        <input id="panner-y" type="range" min="-1.45" max="2.6" step="0.1" value="0"></label>
+      <label>Distance (水平距離): <span id="dist-val">1.4</span> m
+        <input id="panner-dist" type="range" min="0.3" max="3" step="0.1" value="1.4"></label>
+      <h3>Sources</h3>
+      <ul id="source-list"></ul>
+      <button id="add-source">+ Add source</button>
+    </div>
+  </div>
+  <div class="row">
+    <button id="panner-play" class="primary">Play (loop)</button>
+    <button id="panner-stop" disabled>Stop</button>
+    <label class="inline-vol">Volume <input id="panner-vol" type="range" min="0" max="1" step="0.01" value="0.9"></label>
+  </div>
+</section>
+
+<!-- REPORT -->
+<section id="report" class="view">
+  <h2>Reports</h2>
+  <div class="row">
+    <button id="refresh-sessions" class="ghost">Refresh</button>
+    <button id="compare-btn">Compare selected</button>
+  </div>
+  <table id="session-list"><thead><tr>
+    <th></th><th>ID</th><th>Participant</th><th>Condition</th><th>Mode</th>
+    <th>Trials</th><th>Status</th><th>When</th><th></th></tr></thead>
+    <tbody></tbody></table>
+  <div id="report-detail"></div>
+  <div id="compare-detail"></div>
+</section>
+
+<script src="report.js"></script>
+<script src="app.js"></script>
+<script src="vendor/three.min.js"></script>
+<script src="vendor/OrbitControls.js"></script>
+<script src="panner.js"></script>
+</body>
+</html>

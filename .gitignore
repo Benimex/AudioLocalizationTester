@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime data
+localization.db
+
+# User-provided stimulus audio (licensing varies -- keep out of the repo; folder + README stay)
+stimuli/*.wav
