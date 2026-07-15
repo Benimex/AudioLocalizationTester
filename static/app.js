@@ -132,8 +132,6 @@ function makeCircle(onPick) {
 
   svg.appendChild(mk("circle", { cx: C, cy: C, r: R, fill: "#fff", stroke: "#bbb", "stroke-width": 2 }));
 
-  // Clock-face reference (gamer-native): 12=front, 3=right, 6=behind, 9=left. Labels only,
-  // response stays continuous -- no quantization to the hour marks.
   for (let h = 0; h < 12; h++) {
     const az = h * 30, [tx, ty] = xy(az, R - 22);
     const [tickA, tickB] = [xy(az, R), xy(az, R - 8)];
@@ -142,20 +140,17 @@ function makeCircle(onPick) {
       "font-size": 12 }, h === 0 ? 12 : h));
   }
 
-  // First-person cardinal anchors, outside the rim. Names the counter-intuitive "behind = down".
   [["正前 (面向)", 0], ["你的右", 90], ["你的正後方", 180], ["你的左", -90]].forEach(([t, az]) => {
     const [x, y] = xy(az, R + 16);
     svg.appendChild(mk("text", { x, y: y + 4, "text-anchor": "middle", "font-weight": 700,
       fill: "#334" }, t));
   });
 
-  // Response ray + rim marker (points from the head, so radius is clearly irrelevant).
   const ray = mk("line", { x1: C, y1: C, x2: C, y2: C, stroke: "#2b6cff", "stroke-width": 2, opacity: 0 });
   const target = mk("circle", { cx: C, cy: C, r: 7, fill: "#e04", opacity: 0 });
   const marker = mk("circle", { cx: C, cy: C, r: 8, fill: "#2b6cff", opacity: 0 });
   svg.appendChild(ray); svg.appendChild(target); svg.appendChild(marker);
 
-  // Head icon facing up.
   svg.appendChild(mk("circle", { cx: C, cy: C, r: 16, fill: "#dde3ee", stroke: "#889" }));
   svg.appendChild(mk("polygon", { points: `${C},${C - 22} ${C - 6},${C - 10} ${C + 6},${C - 10}`, fill: "#556" }));
   svg.style.cursor = "crosshair";
@@ -164,7 +159,7 @@ function makeCircle(onPick) {
     const pt = svg.getBoundingClientRect();
     const scale = 360 / pt.width;
     const dx = (ev.clientX - pt.left) * scale - C, dy = (ev.clientY - pt.top) * scale - C;
-    if (Math.hypot(dx, dy) < 20) return; // ignore clicks on the head
+    if (Math.hypot(dx, dy) < 20) return;
     const az = Math.round(Math.atan2(dx, -dy) * 180 / Math.PI * 10) / 10;
     setMarker(az);
     onPick(az);
@@ -206,8 +201,19 @@ async function initSetup() {
   checkDevice($("probe-device"), $("probe-device-warn"), $("probe-outmode"));
 
   const stims = await (await fetch("/api/stimuli")).json();
-  const fillS = (sel) => { sel.innerHTML = ""; stims.forEach(s => { const o = document.createElement("option"); o.value = s; o.textContent = s; sel.appendChild(o); }); };
-  fillS($("stimulus")); fillS($("probe-stimulus"));
+  const fillS = (sel) => {
+    sel.innerHTML = "";
+    stims.forEach(s => {
+      const o = document.createElement("option");
+      o.value = s;
+      o.textContent = s;
+      sel.appendChild(o);
+    });
+  };
+  fillS($("stimulus"));
+  fillS($("probe-stimulus"));
+  fillS($("abx-a-stim"));
+  fillS($("abx-b-stim"));
   $("stimulus").onchange = () => setupTrim.load($("stimulus").value);
   $("probe-stimulus").onchange = () => probeTrim.load($("probe-stimulus").value);
   setupTrim.load($("stimulus").value);
@@ -244,9 +250,42 @@ function estimateDuration() {
   $("duration-est").textContent = `${n} trials, ~${Math.floor(secs / 60)}m ${secs % 60}s at ~7s/trial.`;
 }
 
+async function apiJson(url, options) {
+  const response = await fetch(url, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Request failed.");
+  return data;
+}
+
+function postJson(url, body) {
+  return apiJson(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+function setupIdentity() {
+  const participant = $("participant").value.trim();
+  if (!participant) {
+    alert("Enter participant ID");
+    return null;
+  }
+  const devSel = $("device").selectedOptions[0];
+  return {
+    participant,
+    condition: $("condition").value.trim() || "unlabeled",
+    device_index: +devSel.value,
+    device_name: devSel.dataset.name,
+  };
+}
+
 $("start-practice").onclick = () => startSession("practice");
 $("start-main").onclick = () => startSession("main");
 $("start-cmaa").onclick = startCmaa;
+$("start-abx").onclick = startAbx;
+$("start-ext").onclick = startExt;
+$("start-width").onclick = startWidth;
 
 async function startSession(mode) {
   const devSel = $("device").selectedOptions[0];
@@ -260,15 +299,14 @@ async function startSession(mode) {
     stim_region: setupTrim.region(),
     output_mode: $("outmode").value,
   };
-  const s = await (await fetch("/api/session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
+  const s = await postJson("/api/session", body);
   runSession({ id: s.session_id, order: s.trial_order, config: s.config, mode, completed: new Set(s.completed) });
 }
 
-// resume from Reports tab
 document.addEventListener("click", async (e) => {
   const rid = e.target.dataset.resume;
   if (!rid) return;
-  const s = await (await fetch(`/api/session/${rid}/resume`)).json();
+  const s = await apiJson(`/api/session/${rid}/resume`);
   runSession({ id: s.session_id, order: s.trial_order, config: s.config,
     mode: s.session.mode, completed: new Set(s.completed) });
 });
@@ -282,7 +320,6 @@ function runSession(s) {
   $("circle-wrap").innerHTML = "";
   circle = makeCircle(onPick);
   $("circle-wrap").appendChild(circle.svg);
-  // first not-yet-done index
   sess.ptr = sess.order.findIndex((_, i) => !s.completed.has(i));
   if (sess.ptr < 0) { finishSession(); return; }
   nextTrial();
@@ -311,10 +348,11 @@ async function nextTrial() {
 
 async function playStimulus(az, i) {
   const c = sess.config;
-  await fetch("/api/play", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ device_index: c.device_index, target_az: az,
-      stimulus: c.stimulus, stim_region: c.stim_region, peak_dbfs: c.peak_dbfs,
-      seed: c.seed * 100003 + i, output_mode: c.output_mode || "bed71" }) });
+  await postJson("/api/play", {
+    device_index: c.device_index, target_az: az,
+    stimulus: c.stimulus, stim_region: c.stim_region, peak_dbfs: c.peak_dbfs,
+    seed: c.seed * 100003 + i, output_mode: c.output_mode || "bed71",
+  });
 }
 
 function onPick(az) { response = az; $("confirm").disabled = false; }
@@ -324,7 +362,7 @@ $("replay").onclick = async () => {
   replayed = 1; $("replay").disabled = true;
   $("trial-status").textContent = "Replaying…";
   await playStimulus(sess.order[sess.ptr], sess.ptr);
-  timerStart = performance.now(); // timer runs from end of last playback
+  timerStart = performance.now();
   $("trial-status").textContent = "Click the perceived direction, then Confirm.";
 };
 
@@ -333,9 +371,10 @@ $("confirm").onclick = async () => {
   const i = sess.ptr, az = sess.order[i];
   const ms = Math.round(performance.now() - timerStart);
   $("confirm").disabled = true; $("replay").disabled = true;
-  const t = await (await fetch("/api/trial", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sess.id, trial_index: i, target_az: az,
-      response_az: response, replay_count: replayed, response_ms: ms }) })).json();
+  const t = await postJson("/api/trial", {
+    session_id: sess.id, trial_index: i, target_az: az,
+    response_az: response, replay_count: replayed, response_ms: ms,
+  });
   sess.completed.add(i);
 
   if (sess.mode === "practice") {
@@ -345,7 +384,7 @@ $("confirm").onclick = async () => {
     await sleep(2500);
   }
   while (paused) await sleep(200);
-  await sleep(1000); // between-trial gap
+  await sleep(1000);
   sess.ptr++;
   nextTrial();
 };
@@ -378,33 +417,27 @@ async function startCmaa() {
     peak_dbfs: +$("peak").value,
     ref_az: 0,
   };
-  const response = await fetch("/api/cmaa/session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    alert(data.error || "Unable to start CMAA session.");
-    return;
+  try {
+    const data = await postJson("/api/cmaa/session", body);
+    cm = {
+      id: data.session_id,
+      config: data.config,
+      deviceIndex: +devSel.value,
+      practice: [[40, 1], [40, -1], [25, 1], [25, -1]],
+      practiceIdx: 0,
+      phase: "practice",
+    };
+    showView("cmaa");
+    $("cmaa-done").classList.add("hidden");
+    $("cmaa-question").classList.remove("hidden");
+    $("cmaa-left").classList.remove("hidden");
+    $("cmaa-right").classList.remove("hidden");
+    $("cmaa-replay").classList.remove("hidden");
+    $("cmaa-feedback").classList.add("hidden");
+    beginCmaaPractice();
+  } catch (error) {
+    alert(error.message);
   }
-
-  cm = {
-    id: data.session_id,
-    config: data.config,
-    deviceIndex: +devSel.value,
-    practice: [[40, 1], [40, -1], [25, 1], [25, -1]],
-    practiceIdx: 0,
-    phase: "practice",
-  };
-  showView("cmaa");
-  $("cmaa-done").classList.add("hidden");
-  $("cmaa-question").classList.remove("hidden");
-  $("cmaa-left").classList.remove("hidden");
-  $("cmaa-right").classList.remove("hidden");
-  $("cmaa-replay").classList.remove("hidden");
-  $("cmaa-feedback").classList.add("hidden");
-  beginCmaaPractice();
 }
 
 function setCmaaControls(enabled) {
@@ -415,21 +448,15 @@ function setCmaaControls(enabled) {
 
 async function cmaaPlay(spec, seed) {
   const c = cm.config;
-  const response = await fetch("/api/cmaa/play", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      device_index: cm.deviceIndex,
-      ref_az: c.ref_az,
-      delta: spec.delta,
-      high_side: spec.high_side,
-      peak_dbfs: c.peak_dbfs,
-      output_mode: c.output_mode,
-      seed,
-    }),
+  await postJson("/api/cmaa/play", {
+    device_index: cm.deviceIndex,
+    ref_az: c.ref_az,
+    delta: spec.delta,
+    high_side: spec.high_side,
+    peak_dbfs: c.peak_dbfs,
+    output_mode: c.output_mode,
+    seed,
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "Unable to play CMAA stimulus.");
 }
 
 async function beginCmaaPractice() {
@@ -469,18 +496,17 @@ async function loadCmaaState() {
   cmaaBusy = true;
   setCmaaControls(false);
   $("cmaa-status").textContent = "Loading…";
-  const response = await fetch(`/api/cmaa/state/${cm.id}`);
-  const state = await response.json();
-  if (!response.ok) {
+  try {
+    const state = await apiJson(`/api/cmaa/state/${cm.id}`);
+    if (state.done) {
+      showCmaaDone(state.estimate, state.n);
+      return;
+    }
+    await beginCmaaMain(state);
+  } catch (error) {
     cmaaBusy = false;
-    $("cmaa-status").textContent = state.error || "Unable to load CMAA state.";
-    return;
+    $("cmaa-status").textContent = error.message;
   }
-  if (state.done) {
-    showCmaaDone(state.estimate, state.n);
-    return;
-  }
-  await beginCmaaMain(state);
 }
 
 async function beginCmaaMain(spec) {
@@ -525,30 +551,25 @@ async function answerCmaa(responseSide) {
   }
 
   $("cmaa-status").textContent = "Saving…";
-  const response = await fetch("/api/cmaa/trial", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  try {
+    const result = await postJson("/api/cmaa/trial", {
       session_id: cm.id,
       trial_index: cmaaSpec.trial_index,
       delta: cmaaSpec.delta,
       high_side: cmaaSpec.high_side,
       response_side: responseSide,
       response_ms: responseMs,
-    }),
-  });
-  const result = await response.json();
-  if (!response.ok) {
+    });
+    if (result.done) {
+      showCmaaDone(result.estimate, result.n);
+      return;
+    }
     cmaaBusy = false;
-    $("cmaa-status").textContent = result.error || "Unable to save CMAA response.";
-    return;
+    await beginCmaaMain(result);
+  } catch (error) {
+    cmaaBusy = false;
+    $("cmaa-status").textContent = error.message;
   }
-  if (result.done) {
-    showCmaaDone(result.estimate, result.n);
-    return;
-  }
-  cmaaBusy = false;
-  await beginCmaaMain(result);
 }
 
 $("cmaa-left").onclick = () => answerCmaa(-1);
@@ -598,6 +619,464 @@ $("cmaa-to-report").onclick = () => {
   loadSessions();
 };
 
+// ---- ABX flow ----
+let abxSession = null;
+let abxState = null;
+let abxPlayed = { a: false, b: false, x: false };
+let abxTimerStart = 0;
+let abxBusy = false;
+
+function setAbxControls() {
+  const active = Boolean(abxSession && abxState && !abxState.done);
+  $("abx-play-a").disabled = !active || abxBusy;
+  $("abx-play-b").disabled = !active || abxBusy;
+  $("abx-play-x").disabled = !active || abxBusy;
+  const canAnswer = active && !abxBusy &&
+    abxPlayed.a && abxPlayed.b && abxPlayed.x;
+  $("abx-ans-a").disabled = !canAnswer;
+  $("abx-ans-b").disabled = !canAnswer;
+}
+
+async function startAbx() {
+  const identity = setupIdentity();
+  if (!identity) return;
+  const spec = (prefix) => ({
+    stimulus: $(`abx-${prefix}-stim`).value,
+    output_mode: $(`abx-${prefix}-mode`).value,
+    az: +$(`abx-${prefix}-az`).value,
+    peak_dbfs: +$("peak").value,
+    region: null,
+  });
+  try {
+    const data = await postJson("/api/abx/session", {
+      ...identity,
+      spec_a: spec("a"),
+      spec_b: spec("b"),
+      n_trials: +$("abx-n").value,
+    });
+    abxSession = {
+      id: data.session_id,
+      config: data.config,
+      deviceIndex: identity.device_index,
+    };
+    showView("abx");
+    $("abx-done").classList.add("hidden");
+    $("abx-status").textContent = "Loading…";
+    await loadAbxState();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+async function loadAbxState() {
+  if (!abxSession) return;
+  abxBusy = true;
+  setAbxControls();
+  try {
+    const state = await apiJson(`/api/abx/state/${abxSession.id}`);
+    beginAbxState(state);
+  } catch (error) {
+    abxBusy = false;
+    $("abx-status").textContent = error.message;
+    setAbxControls();
+  }
+}
+
+function beginAbxState(state) {
+  abxState = state;
+  if (state.done) {
+    showAbxDone(state);
+    return;
+  }
+  abxPlayed = { a: false, b: false, x: false };
+  abxBusy = false;
+  $("abx-progress").textContent = `Trial ${state.trial_index + 1} of ${state.n_trials}`;
+  $("abx-status").textContent = "請先播放 A、B、X.";
+  setAbxControls();
+}
+
+async function playAbx(which) {
+  if (!abxSession || !abxState || abxState.done || abxBusy) return;
+  abxBusy = true;
+  setAbxControls();
+  $("abx-status").textContent = "Playing…";
+  try {
+    await postJson("/api/abx/play", {
+      session_id: abxSession.id,
+      trial_index: abxState.trial_index,
+      which,
+      device_index: abxSession.deviceIndex,
+    });
+    abxPlayed[which] = true;
+    if (which === "x") abxTimerStart = performance.now();
+    abxBusy = false;
+    $("abx-status").textContent = abxPlayed.a && abxPlayed.b && abxPlayed.x
+      ? "判斷 X 是 A 還是 B."
+      : "可繼續播放 A、B、X.";
+    setAbxControls();
+  } catch (error) {
+    abxBusy = false;
+    $("abx-status").textContent = error.message;
+    setAbxControls();
+  }
+}
+
+$("abx-play-a").onclick = () => playAbx("a");
+$("abx-play-b").onclick = () => playAbx("b");
+$("abx-play-x").onclick = () => playAbx("x");
+
+async function answerAbx(responseIsA) {
+  if (!abxSession || !abxState || abxState.done || abxBusy ||
+      !abxPlayed.a || !abxPlayed.b || !abxPlayed.x) return;
+  abxBusy = true;
+  setAbxControls();
+  $("abx-status").textContent = "Saving…";
+  try {
+    const result = await postJson("/api/abx/trial", {
+      session_id: abxSession.id,
+      trial_index: abxState.trial_index,
+      response_is_a: responseIsA,
+      response_ms: Math.round(performance.now() - abxTimerStart),
+    });
+    beginAbxState(result);
+  } catch (error) {
+    abxBusy = false;
+    $("abx-status").textContent = error.message;
+    setAbxControls();
+  }
+}
+
+$("abx-ans-a").onclick = () => answerAbx(1);
+$("abx-ans-b").onclick = () => answerAbx(0);
+
+function showAbxDone(result) {
+  abxState = result;
+  abxBusy = false;
+  setAbxControls();
+  $("abx-progress").textContent = `${result.n} trials complete`;
+  $("abx-status").textContent = "";
+  const verdict = result.p_value < 0.05
+    ? "可辨識 (統計顯著)"
+    : result.p_value < 0.2
+      ? "可能可辨識 (未達顯著)"
+      : "無法辨識";
+  $("abx-result").textContent =
+    `${result.k}/${result.n} 正確 · p=${result.p_value.toFixed(4)} · ${verdict}`;
+  $("abx-done").classList.remove("hidden");
+}
+
+$("abx-to-report").onclick = () => {
+  showView("report");
+  loadSessions();
+};
+
+// ---- externalization flow ----
+let extSession = null;
+let extState = null;
+let extTimerStart = 0;
+let extReplayed = 0;
+let extBusy = false;
+
+function setExtControls(enabled) {
+  for (let rating = 1; rating <= 5; rating++) {
+    $(`ext-r${rating}`).disabled = !enabled;
+  }
+  $("ext-replay").disabled = !enabled || extReplayed >= 1;
+}
+
+async function startExt() {
+  const identity = setupIdentity();
+  if (!identity) return;
+  try {
+    const data = await postJson("/api/ext/session", {
+      ...identity,
+      output_mode: $("outmode").value,
+      stimulus: $("stimulus").value,
+      peak_dbfs: +$("peak").value,
+      azimuth_step: +$("step").value,
+      stim_region: setupTrim.region(),
+      n_trials: +$("ext-n").value,
+    });
+    extSession = {
+      id: data.session_id,
+      config: data.config,
+      deviceIndex: identity.device_index,
+    };
+    showView("ext");
+    $("ext-done").classList.add("hidden");
+    await loadExtState();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+async function loadExtState() {
+  if (!extSession) return;
+  extBusy = true;
+  setExtControls(false);
+  $("ext-status").textContent = "Loading…";
+  try {
+    const state = await apiJson(`/api/ext/state/${extSession.id}`);
+    if (state.done) {
+      showExtDone(state);
+      return;
+    }
+    await beginExtTrial(state);
+  } catch (error) {
+    extBusy = false;
+    $("ext-status").textContent = error.message;
+  }
+}
+
+async function beginExtTrial(state) {
+  extState = state;
+  extReplayed = 0;
+  extBusy = true;
+  setExtControls(false);
+  $("ext-progress").textContent = `Trial ${state.trial_index + 1} of ${state.n_trials}`;
+  $("ext-status").textContent = "Playing…";
+  try {
+    await playExt();
+    extTimerStart = performance.now();
+    extBusy = false;
+    setExtControls(true);
+    $("ext-status").textContent = "請評分 1–5.";
+  } catch (error) {
+    extBusy = false;
+    $("ext-status").textContent = error.message;
+  }
+}
+
+function playExt() {
+  return postJson("/api/ext/play", {
+    session_id: extSession.id,
+    trial_index: extState.trial_index,
+    device_index: extSession.deviceIndex,
+  });
+}
+
+$("ext-replay").onclick = async () => {
+  if (!extSession || !extState || extState.done || extBusy || extReplayed >= 1) return;
+  extBusy = true;
+  extReplayed = 1;
+  setExtControls(false);
+  $("ext-status").textContent = "Replaying…";
+  try {
+    await playExt();
+    extTimerStart = performance.now();
+    extBusy = false;
+    for (let rating = 1; rating <= 5; rating++) {
+      $(`ext-r${rating}`).disabled = false;
+    }
+    $("ext-replay").disabled = true;
+    $("ext-status").textContent = "請評分 1–5.";
+  } catch (error) {
+    extBusy = false;
+    $("ext-status").textContent = error.message;
+  }
+};
+
+async function answerExt(rating) {
+  if (!extSession || !extState || extState.done || extBusy) return;
+  extBusy = true;
+  setExtControls(false);
+  $("ext-status").textContent = "Saving…";
+  try {
+    const result = await postJson("/api/ext/trial", {
+      session_id: extSession.id,
+      trial_index: extState.trial_index,
+      rating,
+      response_ms: Math.round(performance.now() - extTimerStart),
+    });
+    if (result.done) {
+      showExtDone(result);
+      return;
+    }
+    await beginExtTrial(result);
+  } catch (error) {
+    extBusy = false;
+    $("ext-status").textContent = error.message;
+  }
+}
+
+for (let rating = 1; rating <= 5; rating++) {
+  $(`ext-r${rating}`).onclick = () => answerExt(rating);
+}
+
+function showExtDone(result) {
+  extState = result;
+  extBusy = false;
+  setExtControls(false);
+  $("ext-progress").textContent = `${result.n} trials complete`;
+  $("ext-status").textContent = "";
+  $("ext-result").textContent = `平均 ${result.mean_rating} / 5 (n=${result.n})`;
+  $("ext-done").classList.remove("hidden");
+}
+
+$("ext-to-report").onclick = () => {
+  showView("report");
+  loadSessions();
+};
+
+// ---- soundstage-width flow ----
+let widthSession = null;
+let widthState = null;
+let widthTimerStart = 0;
+let widthReplayed = 0;
+let widthBusy = false;
+
+function setWidthControls(enabled) {
+  $("width-first").disabled = !enabled;
+  $("width-second").disabled = !enabled;
+  $("width-replay").disabled = !enabled || widthReplayed >= 1;
+}
+
+async function startWidth() {
+  const identity = setupIdentity();
+  if (!identity) return;
+  try {
+    const data = await postJson("/api/width/session", {
+      ...identity,
+      stimulus: $("stimulus").value,
+      peak_dbfs: +$("peak").value,
+      stim_region: setupTrim.region(),
+      spread_a: +$("width-a-spread").value,
+      spread_b: +$("width-b-spread").value,
+      outmode_a: $("width-a-mode").value,
+      outmode_b: $("width-b-mode").value,
+      n_trials: +$("width-n").value,
+    });
+    widthSession = {
+      id: data.session_id,
+      config: data.config,
+      deviceIndex: identity.device_index,
+    };
+    showView("width");
+    $("width-done").classList.add("hidden");
+    await loadWidthState();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+async function loadWidthState() {
+  if (!widthSession) return;
+  widthBusy = true;
+  setWidthControls(false);
+  $("width-status").textContent = "Loading…";
+  try {
+    const state = await apiJson(`/api/width/state/${widthSession.id}`);
+    if (state.done) {
+      showWidthDone(state);
+      return;
+    }
+    await beginWidthTrial(state);
+  } catch (error) {
+    widthBusy = false;
+    $("width-status").textContent = error.message;
+  }
+}
+
+async function playWidthPair() {
+  $("width-status").textContent = "Playing 第一段…";
+  await postJson("/api/width/play", {
+    session_id: widthSession.id,
+    trial_index: widthState.trial_index,
+    interval: 1,
+    device_index: widthSession.deviceIndex,
+  });
+  await sleep(600);
+  $("width-status").textContent = "第二段…";
+  await postJson("/api/width/play", {
+    session_id: widthSession.id,
+    trial_index: widthState.trial_index,
+    interval: 2,
+    device_index: widthSession.deviceIndex,
+  });
+}
+
+async function beginWidthTrial(state) {
+  widthState = state;
+  widthReplayed = 0;
+  widthBusy = true;
+  setWidthControls(false);
+  $("width-progress").textContent = `Trial ${state.trial_index + 1} of ${state.n_trials}`;
+  try {
+    await playWidthPair();
+    widthTimerStart = performance.now();
+    widthBusy = false;
+    setWidthControls(true);
+    $("width-status").textContent = "哪一段的音場比較寬?";
+  } catch (error) {
+    widthBusy = false;
+    $("width-status").textContent = error.message;
+  }
+}
+
+$("width-replay").onclick = async () => {
+  if (!widthSession || !widthState || widthState.done || widthBusy || widthReplayed >= 1) return;
+  widthBusy = true;
+  widthReplayed = 1;
+  setWidthControls(false);
+  try {
+    await playWidthPair();
+    widthTimerStart = performance.now();
+    widthBusy = false;
+    $("width-first").disabled = false;
+    $("width-second").disabled = false;
+    $("width-replay").disabled = true;
+    $("width-status").textContent = "哪一段的音場比較寬?";
+  } catch (error) {
+    widthBusy = false;
+    $("width-status").textContent = error.message;
+  }
+};
+
+async function answerWidth(choseFirst) {
+  if (!widthSession || !widthState || widthState.done || widthBusy) return;
+  widthBusy = true;
+  setWidthControls(false);
+  $("width-status").textContent = "Saving…";
+  try {
+    const result = await postJson("/api/width/trial", {
+      session_id: widthSession.id,
+      trial_index: widthState.trial_index,
+      chose_first: choseFirst,
+      response_ms: Math.round(performance.now() - widthTimerStart),
+    });
+    if (result.done) {
+      showWidthDone(result);
+      return;
+    }
+    await beginWidthTrial(result);
+  } catch (error) {
+    widthBusy = false;
+    $("width-status").textContent = error.message;
+  }
+}
+
+$("width-first").onclick = () => answerWidth(1);
+$("width-second").onclick = () => answerWidth(0);
+
+function showWidthDone(result) {
+  widthState = result;
+  widthBusy = false;
+  setWidthControls(false);
+  $("width-progress").textContent = `${result.n} trials complete`;
+  $("width-status").textContent = "";
+  const verdict = result.p_value < 0.05
+    ? "寬度差異顯著"
+    : "無顯著寬度差異";
+  $("width-result").textContent =
+    `A 判定較寬 ${result.k_a}/${result.n} · p=${result.p_value.toFixed(4)} · ${verdict}`;
+  $("width-done").classList.remove("hidden");
+}
+
+$("width-to-report").onclick = () => {
+  showView("report");
+  loadSessions();
+};
+
 // ---- probe ----
 let probeCircle, loopTimer = null;
 function initProbe() {
@@ -618,11 +1097,12 @@ async function probePlay() {
     $("probe-az").value = az;
     probeCircle.setMarker(az);
   }
-  await fetch("/api/play", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ device_index: +devSel.value, target_az: az,
-      stimulus: $("probe-stimulus").value, stim_region: probeTrim.region(),
-      peak_dbfs: +$("probe-peak").value,
-      output_mode: outputMode, seed: Math.floor(Math.random() * 1e9) }) });
+  await postJson("/api/play", {
+    device_index: +devSel.value, target_az: az,
+    stimulus: $("probe-stimulus").value, stim_region: probeTrim.region(),
+    peak_dbfs: +$("probe-peak").value,
+    output_mode: outputMode, seed: Math.floor(Math.random() * 1e9),
+  });
   return true;
 }
 

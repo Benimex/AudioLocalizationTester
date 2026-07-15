@@ -221,6 +221,40 @@ def make_stimulus(kind, seed, burst_ms=250.0, region=None):
     return _raised_cosine_ramp(mono)
 
 
+def render_spec(spec, seed):
+    """Render a generic stimulus specification for listening tests."""
+    stimulus = spec.get("stimulus", "pink")
+    output_mode = spec.get("output_mode", "folddown")
+    az = float(spec.get("az", 0.0))
+    peak_dbfs = float(spec.get("peak_dbfs", -12.0))
+    region = spec.get("region")
+    region = tuple(region) if region is not None else None
+    spread = spec.get("spread")
+
+    if spread is None:
+        mono = make_stimulus(stimulus, seed, region=region)
+        return render_output(mono, az, peak_dbfs, output_mode)
+
+    spread = float(spread)
+    if spread <= 0.0:
+        raise ValueError("spread must be positive.")
+
+    left = make_stimulus(stimulus, seed, region=region)
+    right = make_stimulus(stimulus, seed + 1, region=region)
+    left_frame = render_output(
+        left, az - spread / 2.0, peak_dbfs, output_mode
+    )
+    right_frame = render_output(
+        right, az + spread / 2.0, peak_dbfs, output_mode
+    )
+    mixed = left_frame + right_frame
+
+    peak = np.max(np.abs(mixed)) if mixed.size else 0.0
+    if peak > 0.0:
+        mixed *= 10.0 ** (peak_dbfs / 20.0) / peak
+    return mixed.astype(np.float32)
+
+
 def load_wav(name):
     """Load a mono 48kHz 16-bit PCM WAV from stimuli/."""
     path = os.path.join(os.path.dirname(__file__), "stimuli", name)
@@ -390,6 +424,15 @@ def _selfcheck():
     assert cmaa_bed.shape[1] == 8
     mix_peak = np.max(np.abs(cmaa_folded))
     assert abs(20 * np.log10(mix_peak) - (-12.0)) < 0.5
+
+    assert render_spec({}, 1).shape[1] == 2
+    assert render_spec({"output_mode": "bed71"}, 1).shape[1] == 8
+    spread_mix = render_spec({"spread": 40.0}, 2)
+    assert spread_mix.shape[1] == 2
+    mix_peak = np.max(np.abs(spread_mix))
+    assert abs(20 * np.log10(mix_peak) - (-12.0)) < 0.5
+    assert render_spec({"spread": 40.0, "output_mode": "stereo"}, 3).shape[1] == 2
+    assert np.array_equal(render_spec({}, 5), render_spec({}, 5))
 
     high = band_noise(6, *CMAA_HIGH)
     high_frame = pan_to_stereo(high, 10.0, -12.0)

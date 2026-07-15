@@ -42,6 +42,34 @@ CREATE TABLE IF NOT EXISTS cmaa_trials (
     response_ms INTEGER,
     UNIQUE(session_id, trial_index)
 );
+CREATE TABLE IF NOT EXISTS abx_trials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id),
+    trial_index INTEGER NOT NULL,
+    x_is_a INTEGER NOT NULL,
+    response_is_a INTEGER,
+    correct INTEGER,
+    response_ms INTEGER,
+    UNIQUE(session_id, trial_index)
+);
+CREATE TABLE IF NOT EXISTS ext_trials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id),
+    trial_index INTEGER NOT NULL,
+    target_az REAL NOT NULL,
+    rating INTEGER,
+    response_ms INTEGER,
+    UNIQUE(session_id, trial_index)
+);
+CREATE TABLE IF NOT EXISTS width_trials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id),
+    trial_index INTEGER NOT NULL,
+    a_first INTEGER NOT NULL,
+    chose_a INTEGER,
+    response_ms INTEGER,
+    UNIQUE(session_id, trial_index)
+);
 """
 
 
@@ -105,6 +133,48 @@ def save_cmaa_trial(session_id, trial):
         )
 
 
+def save_abx_trial(session_id, trial):
+    """Insert or replace one ABX trial."""
+    with connect() as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO abx_trials "
+            "(session_id, trial_index, x_is_a, response_is_a, correct, response_ms) "
+            "VALUES (?,?,?,?,?,?)",
+            (
+                session_id, trial["trial_index"], trial["x_is_a"],
+                trial["response_is_a"], trial["correct"], trial["response_ms"],
+            ),
+        )
+
+
+def save_ext_trial(session_id, trial):
+    """Insert or replace one externalization trial."""
+    with connect() as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO ext_trials "
+            "(session_id, trial_index, target_az, rating, response_ms) "
+            "VALUES (?,?,?,?,?)",
+            (
+                session_id, trial["trial_index"], trial["target_az"],
+                trial["rating"], trial["response_ms"],
+            ),
+        )
+
+
+def save_width_trial(session_id, trial):
+    """Insert or replace one soundstage-width trial."""
+    with connect() as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO width_trials "
+            "(session_id, trial_index, a_first, chose_a, response_ms) "
+            "VALUES (?,?,?,?,?)",
+            (
+                session_id, trial["trial_index"], trial["a_first"],
+                trial["chose_a"], trial["response_ms"],
+            ),
+        )
+
+
 def mark_completed(session_id):
     with connect() as connection:
         connection.execute(
@@ -139,6 +209,36 @@ def get_cmaa_trials(session_id):
         return [dict(row) for row in rows]
 
 
+def get_abx_trials(session_id):
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT * FROM abx_trials "
+            "WHERE session_id = ? AND response_is_a IS NOT NULL "
+            "ORDER BY trial_index", (session_id,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_ext_trials(session_id):
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT * FROM ext_trials "
+            "WHERE session_id = ? AND rating IS NOT NULL "
+            "ORDER BY trial_index", (session_id,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_width_trials(session_id):
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT * FROM width_trials "
+            "WHERE session_id = ? AND chose_a IS NOT NULL "
+            "ORDER BY trial_index", (session_id,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 def completed_trial_indices(session_id):
     """Return localization trial indexes that already have a response."""
     with connect() as connection:
@@ -157,7 +257,13 @@ def list_sessions():
             "((SELECT COUNT(*) FROM trials t "
             "  WHERE t.session_id = s.id AND t.response_az IS NOT NULL) + "
             " (SELECT COUNT(*) FROM cmaa_trials c "
-            "  WHERE c.session_id = s.id AND c.response_side IS NOT NULL)) AS n_trials "
+            "  WHERE c.session_id = s.id AND c.response_side IS NOT NULL) + "
+            " (SELECT COUNT(*) FROM abx_trials a "
+            "  WHERE a.session_id = s.id AND a.response_is_a IS NOT NULL) + "
+            " (SELECT COUNT(*) FROM ext_trials e "
+            "  WHERE e.session_id = s.id AND e.rating IS NOT NULL) + "
+            " (SELECT COUNT(*) FROM width_trials w "
+            "  WHERE w.session_id = s.id AND w.chose_a IS NOT NULL)) AS n_trials "
             "FROM sessions s ORDER BY s.created_at DESC"
         ).fetchall()
         return [dict(row) for row in rows]
@@ -219,11 +325,64 @@ if __name__ == "__main__":
     saved = get_cmaa_trials(cmaa_sid)
     assert len(saved) == 1
     assert saved[0]["response_side"] == -1
-    assert list_sessions()[0]["n_trials"] == 1
+
+    new_sid = create_session(
+        "P3", "ROG_APO", "Speakers 7.1", "new-tests",
+        {"seed": 9},
+        "2026-07-12T12:00:00",
+    )
+
+    abx_trial = {
+        "trial_index": 0,
+        "x_is_a": 1,
+        "response_is_a": 1,
+        "correct": 1,
+        "response_ms": 800,
+    }
+    save_abx_trial(new_sid, abx_trial)
+    assert len(get_abx_trials(new_sid)) == 1
+    abx_trial["response_is_a"] = 0
+    abx_trial["correct"] = 0
+    save_abx_trial(new_sid, abx_trial)
+    saved = get_abx_trials(new_sid)
+    assert len(saved) == 1
+    assert saved[0]["response_is_a"] == 0
+
+    ext_trial = {
+        "trial_index": 0,
+        "target_az": 45.0,
+        "rating": 4,
+        "response_ms": 1100,
+    }
+    save_ext_trial(new_sid, ext_trial)
+    assert len(get_ext_trials(new_sid)) == 1
+    ext_trial["rating"] = 5
+    save_ext_trial(new_sid, ext_trial)
+    saved = get_ext_trials(new_sid)
+    assert len(saved) == 1
+    assert saved[0]["rating"] == 5
+
+    width_trial = {
+        "trial_index": 0,
+        "a_first": 1,
+        "chose_a": 0,
+        "response_ms": 950,
+    }
+    save_width_trial(new_sid, width_trial)
+    assert len(get_width_trials(new_sid)) == 1
+    width_trial["chose_a"] = 1
+    save_width_trial(new_sid, width_trial)
+    saved = get_width_trials(new_sid)
+    assert len(saved) == 1
+    assert saved[0]["chose_a"] == 1
+
+    sessions = list_sessions()
+    assert sessions[0]["n_trials"] == 3
+    assert sessions[1]["n_trials"] == 1
 
     mark_completed(sid)
     assert get_session(sid)["completed"] == 1
-    assert list_sessions()[1]["n_trials"] == 1
+    assert sessions[2]["n_trials"] == 1
 
     os.remove(DB_PATH)
     print("db.py selfcheck OK")

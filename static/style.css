@@ -76,3 +76,5 @@ table.mini td:nth-child(3) { max-width: 420px; }
   gap: 6px; padding: 5px 8px; border: 1px solid #e2e2e6; border-radius: 6px; margin-bottom: 5px; }
 #source-list li.active-src { border-color: #2b6cff; background: #eef4ff; }
 #source-list li span { font-size: 13px; }
+.sq { display:inline-block; width:14px; height:14px; margin:2px; border-radius:3px; }
+.ext-btn { min-width:96px; }

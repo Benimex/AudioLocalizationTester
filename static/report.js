@@ -209,6 +209,159 @@ function renderCmaaReport(container, data) {
     "每點是一題, 高度是當題角度差, 綠=答對紅=答錯; 線=收斂出的分離度閾值, 越低越好."));
 }
 
+function trialSquares(trials, color) {
+  const ordered = [...trials].sort((a, b) => a.trial_index - b.trial_index);
+  const step = 18, size = 14;
+  const svg = el("svg", {
+    viewBox: `0 0 ${Math.max(size, ordered.length * step)} ${size}`,
+    width: Math.max(size, ordered.length * step),
+    height: size,
+  });
+  ordered.forEach((trial, index) => {
+    svg.appendChild(el("rect", {
+      x: index * step,
+      y: 0,
+      width: size,
+      height: size,
+      rx: 3,
+      fill: color(trial),
+    }));
+  });
+  return svg;
+}
+
+function extHistogram(hist) {
+  const barWidth = 56, gap = 18, top = 24, chartHeight = 150, bottom = 24;
+  const width = hist.length * barWidth + (hist.length - 1) * gap;
+  const height = top + chartHeight + bottom;
+  const max = Math.max(1, ...hist);
+  const svg = el("svg", {
+    viewBox: `0 0 ${width} ${height}`,
+    width,
+    height,
+  });
+
+  hist.forEach((count, index) => {
+    const barHeight = count / max * chartHeight;
+    const x = index * (barWidth + gap);
+    const y = top + chartHeight - barHeight;
+    svg.appendChild(el("rect", {
+      x,
+      y,
+      width: barWidth,
+      height: barHeight,
+      fill: "#2b6cff",
+      rx: 3,
+    }));
+    svg.appendChild(el("text", {
+      x: x + barWidth / 2,
+      y: Math.max(12, y - 6),
+      "text-anchor": "middle",
+      "font-weight": "700",
+    }, String(count)));
+    svg.appendChild(el("text", {
+      x: x + barWidth / 2,
+      y: top + chartHeight + 17,
+      "text-anchor": "middle",
+    }, String(index + 1)));
+  });
+  return svg;
+}
+
+function reportConfig(session) {
+  try {
+    return JSON.parse(session.config_json || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function formatP(value) {
+  return value == null ? "n/a" : Number(value).toFixed(4);
+}
+
+function renderAbxReport(container, data) {
+  container.innerHTML = "";
+  const s = data.session;
+  if (!data.n) {
+    container.textContent = "No committed trials.";
+    return;
+  }
+
+  const config = reportConfig(s);
+  const specA = config.spec_a || {};
+  const specB = config.spec_b || {};
+  const p = data.p_value;
+  const verdict = p != null && p < 0.05
+    ? "可辨識, 統計顯著"
+    : p != null && p < 0.2
+      ? "可能可辨識, 未達顯著"
+      : "無法辨識 — 兩個 render 對受測者聽起來相同";
+
+  const specText = spec =>
+    `${spec.stimulus ?? "n/a"} / ${spec.output_mode ?? "n/a"} / az ${spec.az ?? "n/a"}°`;
+
+  const summary = document.createElement("div");
+  summary.className = "metric-block";
+  summary.innerHTML = `<h3>Session #${s.id} — ${s.participant} / ${s.condition}</h3>
+    <p><span class="big-num">${data.k}/${data.n}</span></p>
+    <p>p = ${formatP(p)}</p>
+    <p><b>${verdict}</b></p>
+    <p class="hint">ABX 原理：先聽 A、B，再判斷未知的 X 與 A 或 B 相同；答對率顯著高於隨機猜測代表可辨識。</p>
+    <p class="hint">A: ${specText(specA)} vs B: ${specText(specB)}</p>`;
+  container.appendChild(summary);
+  container.appendChild(metricBlock("逐題結果",
+    trialSquares(data.trials, trial => trial.correct ? "#24934d" : "#d33b3b"),
+    "綠色 = 答對，紅色 = 答錯；依題號排列."));
+}
+
+function renderExtReport(container, data) {
+  container.innerHTML = "";
+  const s = data.session;
+  if (!data.n) {
+    container.textContent = "No committed trials.";
+    return;
+  }
+
+  const summary = document.createElement("div");
+  summary.className = "metric-block";
+  summary.innerHTML = `<h3>Session #${s.id} — ${s.participant} / ${s.condition}</h3>
+    <p><span class="big-num">${data.mean_rating} / 5</span></p>
+    <p>n=${data.n}</p>
+    <p class="hint">1=頭內，5=頭外，越高外化越好；主觀量表，與定位/ABX 的客觀對錯不同，報告時分開解讀。</p>`;
+  container.appendChild(summary);
+  container.appendChild(metricBlock("評分分布", extHistogram(data.hist)));
+}
+
+function renderWidthReport(container, data) {
+  container.innerHTML = "";
+  const s = data.session;
+  if (!data.n) {
+    container.textContent = "No committed trials.";
+    return;
+  }
+
+  const config = reportConfig(s);
+  const specA = config.spec_a || {};
+  const specB = config.spec_b || {};
+  const p = data.p_value;
+  const verdict = p != null && p < 0.05 ? "寬度差異顯著" : "無顯著差異";
+  const specText = spec =>
+    `spread ${spec.spread ?? "n/a"}° / ${spec.output_mode ?? "n/a"}`;
+
+  const summary = document.createElement("div");
+  summary.className = "metric-block";
+  summary.innerHTML = `<h3>Session #${s.id} — ${s.participant} / ${s.condition}</h3>
+    <p><span class="big-num">${data.k_a}/${data.n}</span> A 判定較寬</p>
+    <p>p = ${formatP(p)} (two-sided)</p>
+    <p><b>${verdict}</b></p>
+    <p class="hint">A: ${specText(specA)} vs B: ${specText(specB)}</p>`;
+  container.appendChild(summary);
+  container.appendChild(metricBlock("逐題結果",
+    trialSquares(data.trials, trial => trial.chose_a ? "#24934d" : "#999"),
+    "綠色 = 選擇 A，灰色 = 選擇 B；無對錯，顏色只標選擇."));
+}
+
 function pct(x) { return x == null ? "n/a" : (x * 100).toFixed(1) + "%"; }
 
 function renderCompare(container, cols) {
@@ -217,6 +370,9 @@ function renderCompare(container, cols) {
 
   const locCols = cols.filter(c => c.metrics.type === "loc");
   const cmaaCols = cols.filter(c => c.metrics.type === "cmaa");
+  const abxCols = cols.filter(c => c.metrics.type === "abx");
+  const extCols = cols.filter(c => c.metrics.type === "extern");
+  const widthCols = cols.filter(c => c.metrics.type === "width");
   let html = "";
 
   if (locCols.length) {
@@ -259,6 +415,59 @@ function renderCompare(container, cols) {
     html += "</table></div>";
   }
 
+  if (abxCols.length) {
+    const rows = [
+      ["n", c => c.metrics.n],
+      ["Correct k/n", c => `${c.metrics.k}/${c.metrics.n}`],
+      ["p 值", c => formatP(c.metrics.p_value)],
+    ];
+    html += "<div class='metric-block'><h3>ABX</h3>" +
+      "<p class='hint'>答對率越高且 p 值越低，越支持兩個 render 可被辨識.</p><table><tr><th>Metric</th>";
+    abxCols.forEach(c => html += `<th>${c.label}</th>`);
+    html += "</tr>";
+    rows.forEach(([name, fn]) => {
+      html += `<tr><td>${name}</td>`;
+      abxCols.forEach(c => html += `<td>${fn(c)}</td>`);
+      html += "</tr>";
+    });
+    html += "</table></div>";
+  }
+
+  if (extCols.length) {
+    const rows = [
+      ["n", c => c.metrics.n],
+      ["平均頭外感 1-5", c => c.metrics.mean_rating ?? "n/a"],
+    ];
+    html += "<div class='metric-block'><h3>Externalization</h3>" +
+      "<p class='hint'>平均分數越高，主觀頭外感越強；請與客觀對錯指標分開解讀.</p><table><tr><th>Metric</th>";
+    extCols.forEach(c => html += `<th>${c.label}</th>`);
+    html += "</tr>";
+    rows.forEach(([name, fn]) => {
+      html += `<tr><td>${name}</td>`;
+      extCols.forEach(c => html += `<td>${fn(c)}</td>`);
+      html += "</tr>";
+    });
+    html += "</table></div>";
+  }
+
+  if (widthCols.length) {
+    const rows = [
+      ["n", c => c.metrics.n],
+      ["A較寬比例", c => c.metrics.n ? pct(c.metrics.k_a / c.metrics.n) : "n/a"],
+      ["p 值", c => formatP(c.metrics.p_value)],
+    ];
+    html += "<div class='metric-block'><h3>Soundstage Width</h3>" +
+      "<p class='hint'>A 較寬比例顯示選擇方向，p 值用來判斷 A、B 寬度差異是否顯著.</p><table><tr><th>Metric</th>";
+    widthCols.forEach(c => html += `<th>${c.label}</th>`);
+    html += "</tr>";
+    rows.forEach(([name, fn]) => {
+      html += `<tr><td>${name}</td>`;
+      widthCols.forEach(c => html += `<td>${fn(c)}</td>`);
+      html += "</tr>";
+    });
+    html += "</table></div>";
+  }
+
   container.innerHTML = html;
 }
 
@@ -283,12 +492,17 @@ async function loadSessions() {
 document.addEventListener("click", async (e) => {
   const rep = e.target.dataset.report;
   if (rep) {
-    const isCmaa = e.target.dataset.mode === "cmaa";
-    const endpoint = isCmaa ? `/api/cmaa/report/${rep}` : `/api/report/${rep}`;
+    const mode = e.target.dataset.mode;
+    const reports = {
+      cmaa: [`/api/cmaa/report/${rep}`, renderCmaaReport],
+      abx: [`/api/abx/report/${rep}`, renderAbxReport],
+      extern: [`/api/ext/report/${rep}`, renderExtReport],
+      width: [`/api/width/report/${rep}`, renderWidthReport],
+    };
+    const [endpoint, renderer] = reports[mode] || [`/api/report/${rep}`, renderReport];
     const data = await (await fetch(endpoint)).json();
     const detail = document.getElementById("report-detail");
-    if (isCmaa) renderCmaaReport(detail, data);
-    else renderReport(detail, data);
+    renderer(detail, data);
     document.getElementById("compare-detail").innerHTML = "";
   }
   if (e.target.id === "compare-btn") {

@@ -55,6 +55,21 @@ the APO under test. Double-processing (Windows Sonic + your APO) invalidates res
 - **Manual Probe:** set an exact azimuth (0.1°) and play/loop any stimulus, for
   subjective spot-checks. Not recorded. Elevation is disabled (Phase 2 — see below).
 
+## Additional tests
+
+- **CMAA separation** (Start Separation Test): two simultaneous band-limited noise sources;
+  QUEST adaptive 2AFC converges in 20-40 trials (~3-5 min) on a separation threshold in
+  degrees — lower = better imaging/separation.
+- **ABX discrimination** (進階測試 → ABX): can a listener hear ANY difference between two
+  render specs (stimulus + output mode + azimuth)? Unlimited A/B/X replays, exact binomial
+  p-value. To compare APO versions or surround on/off, capture each condition's output as a
+  WAV, drop both into `stimuli/`, and ABX the two files.
+- **Externalization rating** (進階測試 → Externalization): rate each presentation 1 (in-head)
+  to 5 (clearly out-of-head). Subjective scale — report separately from objective error metrics.
+- **Soundstage width** (進階測試 → Width): 2AFC "which interval sounds wider" between two
+  decorrelated-pair spreads; two-sided binomial p-value. Use pink noise (a WAV is identical
+  on both sides, so perceived width is limited).
+
 ## Reports
 
 Per session and via the Reports browser: overall + per-azimuth mean absolute error

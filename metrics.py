@@ -1,4 +1,5 @@
 """Localization metrics: signed error, front-back / left-right confusion, binning."""
+import math
 import numpy as np
 
 
@@ -58,6 +59,22 @@ def grid_azimuths(step=30.0):
     return [norm180(i * step) for i in range(n)]
 
 
+def binom_p_one_sided(k, n):
+    """Exact P(X >= k) for X distributed Binomial(n, 0.5)."""
+    if not 0 <= k <= n:
+        raise ValueError("Require 0 <= k <= n.")
+    return sum(math.comb(n, i) for i in range(k, n + 1)) / 2 ** n
+
+
+def binom_p_two_sided(k, n):
+    """Exact doubled-tail binomial p-value under p=0.5."""
+    if not 0 <= k <= n:
+        raise ValueError("Require 0 <= k <= n.")
+    lower = sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n
+    upper = binom_p_one_sided(k, n)
+    return min(1.0, 2.0 * min(lower, upper))
+
+
 def _selfcheck():
     # Signed error shortest arc.
     assert signed_error(170, -170) == 20.0, signed_error(170, -170)
@@ -87,6 +104,12 @@ def _selfcheck():
     assert bin_az(175, 30) == -180.0 or bin_az(175, 30) == 180.0
     assert len(grid_azimuths(30)) == 12
     assert len(grid_azimuths(15)) == 24
+
+    # Exact binomial probabilities.
+    assert abs(binom_p_one_sided(8, 10) - 56 / 1024) < 1e-12
+    assert abs(binom_p_one_sided(10, 10) - 1 / 1024) < 1e-12
+    assert abs(binom_p_two_sided(5, 10) - 1.0) < 1e-12
+    assert abs(binom_p_two_sided(0, 10) - 2 / 1024) < 1e-12
 
     print("metrics.py selfcheck OK")
 

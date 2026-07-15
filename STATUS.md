@@ -2,6 +2,24 @@
 
 as-of: 2026-07-16
 
+## 2026-07-16 (四): ABX + 頭外感 + 音場寬度 三測試 (Ben 拍板 1+2+3, 睡前交辦全自動執行)
+- Codex 四批 (核心模組 / main.py 路由 / index.html+app.js / report.js+css), Claude 套用+驗收.
+- ABX: 兩 render spec (stimulus/output_mode/az) 差異辨識, X 隨機, 無限重播, 精確二項 p 值
+  (單尾). 比 APO 版本 = 先錄成 WAV 丟 stimuli/ 再 ABX 兩檔 (README 已記).
+- Externalization: 每題評 1-5 (頭內→頭外), 方位由 seed 隨機取格點, 平均分 + 直方圖.
+  主觀量表, 報表註明與客觀指標分開解讀.
+- Width: 去相關雙 token 展開角 (spec A/B 各自 spread+outmode), 兩段 2AFC 誰寬,
+  雙尾二項 p. WAV 兩側同檔寬度感有限, UI 建議 pink.
+- 架構: audio.render_spec 泛用渲染 (單源/spread 雙源, 任一 output_mode); 三張 trial 表;
+  x_is_a / a_first 為 server 端秘密 (seed 派生), 任何 API 回應不外洩 (驗過).
+- Verified: 四模組 selfcheck; 三 JS node --check; JS id 交叉檢查 (80 id 全存在);
+  API 端到端: ABX 秘密不洩+seeded 正解重算一致, ext rating 驗證 400/hist/mean,
+  width chose_a 映射, compare 五型 ['abx','cmaa','extern','loc','width'], 舊流程回歸過.
+- 修正 (Claude review): 無 — 本輪 Codex 四批零缺陷 (前兩輪各有 bug, spec 越細品質越穩).
+- DB 注意: 今日 API 測試曾 rm localization.db, 07-12 的 practice/demo session 已失
+  (皆非正式資料). 已重塞五型 DEMO session (id 1-5) 供報表檢視. 未來驗收改用 temp DB.
+- README 加 Additional tests 節.
+
 ## 2026-07-16 (三): CMAA 分離度測試 (Codex 撰寫 x2 批, Claude 驗收)
 - 背景: Ben 要客觀量測耳機「分離度」. 研究定案 CMAA (concurrent minimum audible angle,
   同時雙音源最小可辨角) + QUEST Bayesian 自適應 (25-40 題, 3-5 分/場, 免訓練).

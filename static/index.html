@@ -53,6 +53,71 @@
     <button id="start-main" class="primary">Start Main Session</button>
     <button id="start-cmaa">Start Separation Test (CMAA)</button>
   </div>
+
+  <h3>進階測試</h3>
+  <div id="abx-setup">
+    <div class="row">
+      <label>A: <select id="abx-a-stim"></select></label>
+      <label>Output mode
+        <select id="abx-a-mode">
+          <option value="bed71">bed71</option>
+          <option value="folddown" selected>folddown</option>
+          <option value="stereo">stereo</option>
+        </select>
+      </label>
+      <label>Azimuth <input id="abx-a-az" type="number" value="0" min="-180" max="180"></label>
+    </div>
+    <div class="row">
+      <label>B: <select id="abx-b-stim"></select></label>
+      <label>Output mode
+        <select id="abx-b-mode">
+          <option value="bed71">bed71</option>
+          <option value="folddown" selected>folddown</option>
+          <option value="stereo">stereo</option>
+        </select>
+      </label>
+      <label>Azimuth <input id="abx-b-az" type="number" value="0" min="-180" max="180"></label>
+    </div>
+    <div class="row">
+      <label>Trials <input id="abx-n" type="number" value="16" min="5" max="50"></label>
+      <button id="start-abx">Start ABX (差異辨識)</button>
+    </div>
+    <p class="hint">ABX 測「A 與 B 聽不聽得出差別」; X 隨機是 A 或 B, 可無限重播, 答對率過半才算聽得出.</p>
+  </div>
+
+  <div id="ext-setup">
+    <div class="row">
+      <label>Trials <input id="ext-n" type="number" value="12" min="5" max="40"></label>
+      <button id="start-ext">Start Externalization (頭外感)</button>
+    </div>
+    <p class="hint">用上方的 Stimulus/Output mode/step 設定; 每題評 1-5 分 (1=完全在頭內, 5=明顯在頭外).</p>
+  </div>
+
+  <div id="width-setup">
+    <div class="row">
+      <label>A spread <input id="width-a-spread" type="number" value="30" min="0" max="120" step="5"></label>
+      <label>A output mode
+        <select id="width-a-mode">
+          <option value="bed71">bed71</option>
+          <option value="folddown" selected>folddown</option>
+          <option value="stereo">stereo</option>
+        </select>
+      </label>
+      <label>B spread <input id="width-b-spread" type="number" value="60" min="0" max="120" step="5"></label>
+      <label>B output mode
+        <select id="width-b-mode">
+          <option value="bed71">bed71</option>
+          <option value="folddown" selected>folddown</option>
+          <option value="stereo">stereo</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label>Trials <input id="width-n" type="number" value="12" min="5" max="40"></label>
+      <button id="start-width">Start Width (音場寬度)</button>
+    </div>
+    <p class="hint">兩段聲音誰比較寬 (2AFC); 寬度用去相關雙 token 展開角呈現, 建議 stimulus 用 pink (WAV 兩側相同檔, 寬度感有限).</p>
+  </div>
 </section>
 
 <!-- TRIAL -->
@@ -93,6 +158,74 @@
     <h3>Separation test complete</h3>
     <p id="cmaa-result"></p>
     <button id="cmaa-to-report">View report</button>
+  </div>
+</section>
+
+<!-- ABX -->
+<section id="abx" class="view">
+  <div class="trial-top">
+    <span id="abx-progress"></span>
+  </div>
+  <p class="hint">聽 A、聽 B、聽 X, X 是 A 或 B 其中之一, 可重複播放, 判斷 X 是誰.</p>
+  <div class="row">
+    <button id="abx-play-a" class="ghost">Play A</button>
+    <button id="abx-play-b" class="ghost">Play B</button>
+    <button id="abx-play-x" class="ghost">Play X</button>
+  </div>
+  <div class="cmaa-row">
+    <button id="abx-ans-a" class="cmaa-btn" disabled>X = A</button>
+    <button id="abx-ans-b" class="cmaa-btn" disabled>X = B</button>
+  </div>
+  <p id="abx-status" class="hint"></p>
+  <div id="abx-done" class="hidden">
+    <h3>ABX test complete</h3>
+    <p id="abx-result"></p>
+    <button id="abx-to-report">View report</button>
+  </div>
+</section>
+
+<!-- EXTERNALIZATION -->
+<section id="ext" class="view">
+  <div class="trial-top">
+    <span id="ext-progress"></span>
+  </div>
+  <p id="ext-question">這個聲音聽起來在哪裡? 1 = 完全在頭內, 5 = 明顯在頭外空間</p>
+  <div class="trial-controls">
+    <button id="ext-replay" disabled>Replay (1x)</button>
+  </div>
+  <div class="cmaa-row">
+    <button id="ext-r1" class="cmaa-btn ext-btn" disabled>1 頭內</button>
+    <button id="ext-r2" class="cmaa-btn ext-btn" disabled>2</button>
+    <button id="ext-r3" class="cmaa-btn ext-btn" disabled>3 頭表面</button>
+    <button id="ext-r4" class="cmaa-btn ext-btn" disabled>4</button>
+    <button id="ext-r5" class="cmaa-btn ext-btn" disabled>5 頭外</button>
+  </div>
+  <p id="ext-status" class="hint"></p>
+  <div id="ext-done" class="hidden">
+    <h3>Externalization test complete</h3>
+    <p id="ext-result"></p>
+    <button id="ext-to-report">View report</button>
+  </div>
+</section>
+
+<!-- WIDTH -->
+<section id="width" class="view">
+  <div class="trial-top">
+    <span id="width-progress"></span>
+  </div>
+  <p id="width-question">會連續聽到兩段聲音, 哪一段的音場比較寬?</p>
+  <div class="trial-controls">
+    <button id="width-replay" disabled>Replay pair (1x)</button>
+  </div>
+  <div class="cmaa-row">
+    <button id="width-first" class="cmaa-btn" disabled>第一段較寬</button>
+    <button id="width-second" class="cmaa-btn" disabled>第二段較寬</button>
+  </div>
+  <p id="width-status" class="hint"></p>
+  <div id="width-done" class="hidden">
+    <h3>Width test complete</h3>
+    <p id="width-result"></p>
+    <button id="width-to-report">View report</button>
   </div>
 </section>
 
