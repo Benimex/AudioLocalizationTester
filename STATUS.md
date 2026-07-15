@@ -2,6 +2,25 @@
 
 as-of: 2026-07-16
 
+## 2026-07-16 (三): CMAA 分離度測試 (Codex 撰寫 x2 批, Claude 驗收)
+- 背景: Ben 要客觀量測耳機「分離度」. 研究定案 CMAA (concurrent minimum audible angle,
+  同時雙音源最小可辨角) + QUEST Bayesian 自適應 (25-40 題, 3-5 分/場, 免訓練).
+- 新檔 cmaa.py: 純 numpy QUEST (61 點 log grid 1-60 度, cumulative-normal psychometric
+  SIGMA=.12 LAPSE=.02, prior N(log15,.35), 停止 n>=40 或 n>=20 且 sd_log<=.06),
+  無狀態 (posterior 由 trial history 重建, crash-safe 免 resume 邏輯).
+- audio.py: band_noise (FFT bandpass pink), 低頻 200-1200 / 高頻 2k-8k 雙源,
+  render_cmaa (ref±Δ/2 對稱擺位, 任一 output_mode, mix 峰值校準).
+- db.py: cmaa_trials 表; list_sessions 計數含 cmaa.
+- main.py: /api/cmaa/session|state|play|trial|report; /api/compare 分 type loc|cmaa.
+- 前端: Setup 第三顆鈕 Start Separation Test; cmaa view (問題: 清亮聲在低沉聲哪一邊,
+  左/右大鈕, 4 題 practice 含回饋後進 QUEST, 主測無回饋, replay 1x);
+  報表 staircase SVG (log y 軸, 綠對紅錯, 閾值虛線+CI 帶) + Compare 分離度表.
+- 修 2 bug (Codex 產出): cmaa.py frompyfunc erf 純量 .astype 炸 (改 np.asarray);
+  main.py peak_dbfs 寫成必填 (spec 是 default -12).
+- Verified: cmaa.py selfcheck (模擬觀察者 seeds 0-2 恢復閾值 5-13 度); 四模組 selfcheck;
+  三 JS node --check; API 端到端模擬跑完 32 題閾值 7.9 度 CI 6.1-10.3 (真值 8);
+  舊流程回歸 (stereo 28 題, index/sessions 200) 過. 未 commit.
+
 ## 2026-07-16: 2ch 輸出模式 (Codex GPT-5.6-Sol 撰寫, Claude 驗收)
 - 背景: Pelta Core 端點只收 2ch (Savitech APO 的 7.1 downmix 需 driver 宣告 7.1 device format,
   此 SKU 未宣告); 遊戲的 7.1 選項實為遊戲內部 fold-down 成 2ch 再送出. 工具跟進此模式.

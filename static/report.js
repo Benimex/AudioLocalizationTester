@@ -112,29 +112,153 @@ function renderReport(container, data) {
     "偏離對角線 = 聽錯; 與對角線垂直的另一條斜帶 = 前後鏡像混淆的熱點."));
 }
 
+function cmaaStaircase(data) {
+  const W = 720, H = 320;
+  const left = 52, right = 18, top = 14, bottom = 38;
+  const plotW = W - left - right, plotH = H - top - bottom;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H });
+  const trials = data.trials;
+  const estimate = data.estimate;
+  const y = (delta) => top + plotH -
+    (Math.log10(Math.max(1, Math.min(60, delta))) / Math.log10(60)) * plotH;
+  const x = (index) => left + (trials.length <= 1 ? plotW / 2 : index / (trials.length - 1) * plotW);
+
+  svg.appendChild(el("rect", {
+    x: left, y: top, width: plotW, height: plotH,
+    fill: "#fff", stroke: "#ccc",
+  }));
+
+  for (const tick of [1, 2, 5, 10, 20, 40, 60]) {
+    const ty = y(tick);
+    svg.appendChild(el("line", {
+      x1: left, y1: ty, x2: left + plotW, y2: ty,
+      stroke: "#ececec",
+    }));
+    svg.appendChild(el("text", {
+      x: left - 7, y: ty + 4, "text-anchor": "end",
+    }, String(tick)));
+  }
+
+  for (let tick = 0; tick < trials.length; tick += 5) {
+    const tx = x(tick);
+    svg.appendChild(el("line", {
+      x1: tx, y1: top + plotH, x2: tx, y2: top + plotH + 5,
+      stroke: "#777",
+    }));
+    svg.appendChild(el("text", {
+      x: tx, y: top + plotH + 18, "text-anchor": "middle",
+    }, String(tick)));
+  }
+
+  if (estimate) {
+    const bandTop = y(estimate.ci_hi);
+    const bandBottom = y(estimate.ci_lo);
+    svg.appendChild(el("rect", {
+      x: left,
+      y: bandTop,
+      width: plotW,
+      height: Math.max(0, bandBottom - bandTop),
+      fill: "rgba(43,108,255,.14)",
+    }));
+    const thresholdY = y(estimate.threshold);
+    svg.appendChild(el("line", {
+      x1: left, y1: thresholdY, x2: left + plotW, y2: thresholdY,
+      stroke: "#2b6cff", "stroke-width": 2, "stroke-dasharray": "7 5",
+    }));
+  }
+
+  for (const trial of trials) {
+    svg.appendChild(el("circle", {
+      cx: x(trial.trial_index),
+      cy: y(trial.delta),
+      r: 4,
+      fill: trial.correct ? "#24934d" : "#d33b3b",
+      stroke: "#fff",
+      "stroke-width": 1,
+    }));
+  }
+
+  svg.appendChild(el("text", {
+    x: left + plotW / 2, y: H - 5, "text-anchor": "middle",
+    "font-weight": "700",
+  }, "Trial index"));
+  svg.appendChild(el("text", {
+    x: 14, y: top + plotH / 2, "text-anchor": "middle",
+    transform: `rotate(-90 14 ${top + plotH / 2})`,
+    "font-weight": "700",
+  }, "Delta (°, log scale)"));
+  return svg;
+}
+
+function renderCmaaReport(container, data) {
+  container.innerHTML = "";
+  const s = data.session, estimate = data.estimate;
+  if (!data.n || !estimate) {
+    container.textContent = "No committed trials.";
+    return;
+  }
+
+  const summary = document.createElement("div");
+  summary.className = "metric-block";
+  summary.innerHTML = `<h3>Session #${s.id} — ${s.participant} / ${s.condition}</h3>
+    <p><span class="big-num">${estimate.threshold.toFixed(1)}°</span> separation threshold</p>
+    <p>CI ${estimate.ci_lo.toFixed(1)}°–${estimate.ci_hi.toFixed(1)}° · n=${data.n}</p>
+    <p class="hint">閾值越低代表能分辨越接近的兩個聲音, 分離度越好.</p>`;
+  container.appendChild(summary);
+  container.appendChild(metricBlock("QUEST staircase", cmaaStaircase(data),
+    "每點是一題, 高度是當題角度差, 綠=答對紅=答錯; 線=收斂出的分離度閾值, 越低越好."));
+}
+
 function pct(x) { return x == null ? "n/a" : (x * 100).toFixed(1) + "%"; }
 
 function renderCompare(container, cols) {
   container.innerHTML = "";
   if (!cols.length) { container.textContent = "Select 2+ sessions and click Compare."; return; }
-  const rows = [
-    ["n", c => c.metrics.n],
-    ["MAE (°)", c => c.metrics.mae ?? "n/a"],
-    ["Front-back conf.", c => pct(c.metrics.fb_rate)],
-    ["Left-right conf.", c => pct(c.metrics.lr_rate)],
-  ];
-  let html = "<div class='metric-block'><h3>Comparison</h3>" +
-    "<p class='hint'>每欄一個 session, 或相同 condition 多個 session 合併的 POOLED 欄. " +
-    "判讀: MAE 低且前後/左右混淆率低的 condition 勝. n = 該欄有效題數.</p>" +
-    "<table><tr><th>Metric</th>";
-  cols.forEach(c => html += `<th>${c.label}</th>`);
-  html += "</tr>";
-  rows.forEach(([name, fn]) => {
-    html += `<tr><td>${name}</td>`;
-    cols.forEach(c => html += `<td>${fn(c)}</td>`);
+
+  const locCols = cols.filter(c => c.metrics.type === "loc");
+  const cmaaCols = cols.filter(c => c.metrics.type === "cmaa");
+  let html = "";
+
+  if (locCols.length) {
+    const rows = [
+      ["n", c => c.metrics.n],
+      ["MAE (°)", c => c.metrics.mae ?? "n/a"],
+      ["Front-back conf.", c => pct(c.metrics.fb_rate)],
+      ["Left-right conf.", c => pct(c.metrics.lr_rate)],
+    ];
+    html += "<div class='metric-block'><h3>Comparison</h3>" +
+      "<p class='hint'>每欄一個 session, 或相同 condition 多個 session 合併的 POOLED 欄. " +
+      "判讀: MAE 低且前後/左右混淆率低的 condition 勝. n = 該欄有效題數.</p>" +
+      "<table><tr><th>Metric</th>";
+    locCols.forEach(c => html += `<th>${c.label}</th>`);
     html += "</tr>";
-  });
-  html += "</table></div>";
+    rows.forEach(([name, fn]) => {
+      html += `<tr><td>${name}</td>`;
+      locCols.forEach(c => html += `<td>${fn(c)}</td>`);
+      html += "</tr>";
+    });
+    html += "</table></div>";
+  }
+
+  if (cmaaCols.length) {
+    const rows = [
+      ["n", c => c.metrics.n],
+      ["Threshold (°)", c => c.metrics.threshold == null ? "n/a" : c.metrics.threshold.toFixed(1)],
+      ["CI", c => c.metrics.ci_lo == null || c.metrics.ci_hi == null
+        ? "n/a" : `${c.metrics.ci_lo.toFixed(1)}°–${c.metrics.ci_hi.toFixed(1)}°`],
+    ];
+    html += "<div class='metric-block'><h3>Separation (CMAA)</h3>" +
+      "<p class='hint'>閾值越低分離度越好.</p><table><tr><th>Metric</th>";
+    cmaaCols.forEach(c => html += `<th>${c.label}</th>`);
+    html += "</tr>";
+    rows.forEach(([name, fn]) => {
+      html += `<tr><td>${name}</td>`;
+      cmaaCols.forEach(c => html += `<td>${fn(c)}</td>`);
+      html += "</tr>";
+    });
+    html += "</table></div>";
+  }
+
   container.innerHTML = html;
 }
 
@@ -151,7 +275,7 @@ async function loadSessions() {
     tr.innerHTML = `<td><input type="checkbox" data-sid="${s.id}"></td>
       <td>${s.id}</td><td>${s.participant}</td><td>${s.condition}</td><td>${s.mode}</td>
       <td>${s.n_trials}</td><td>${status}</td><td>${s.created_at.slice(0, 16).replace("T", " ")}</td>
-      <td><button data-report="${s.id}">view</button> ${resume}</td>`;
+      <td><button data-report="${s.id}" data-mode="${s.mode}">view</button> ${resume}</td>`;
     tb.appendChild(tr);
   }
 }
@@ -159,8 +283,12 @@ async function loadSessions() {
 document.addEventListener("click", async (e) => {
   const rep = e.target.dataset.report;
   if (rep) {
-    const data = await (await fetch(`/api/report/${rep}`)).json();
-    renderReport(document.getElementById("report-detail"), data);
+    const isCmaa = e.target.dataset.mode === "cmaa";
+    const endpoint = isCmaa ? `/api/cmaa/report/${rep}` : `/api/report/${rep}`;
+    const data = await (await fetch(endpoint)).json();
+    const detail = document.getElementById("report-detail");
+    if (isCmaa) renderCmaaReport(detail, data);
+    else renderReport(detail, data);
     document.getElementById("compare-detail").innerHTML = "";
   }
   if (e.target.id === "compare-btn") {

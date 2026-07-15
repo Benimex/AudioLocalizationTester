@@ -1,23 +1,22 @@
-"""Flask app: serves UI, enumerates devices, plays panned stimuli, records trials.
-
-Run: python main.py  -> starts server and opens the browser.
-Playback is server-side (blocking) so the browser never touches the 8ch audio path.
-"""
+"""Flask app: serves UI, plays stimuli, records trials, and reports results."""
 import csv
 import io
+import json
 import random
 import threading
 import webbrowser
 from datetime import datetime, timezone
 
-from flask import Flask, jsonify, request, send_from_directory, Response
+from flask import Flask, Response, jsonify, request, send_from_directory
 
 import audio
 import audio_hrtf
+import cmaa
 import db
 import metrics
 
 app = Flask(__name__, static_folder="static", static_url_path="")
+OUTPUT_MODES = {"bed71", "folddown", "stereo"}
 
 
 def _now():
@@ -25,27 +24,61 @@ def _now():
 
 
 def trial_order(seed, azimuth_step, reps, output_mode="bed71"):
-    """Deterministic randomized trial order: each eligible grid azimuth repeated and shuffled."""
-    azes = metrics.grid_azimuths(azimuth_step)
+    """Deterministic randomized localization trial order."""
+    azimuths = metrics.grid_azimuths(azimuth_step)
     if output_mode == "stereo":
-        azes = [az for az in azes if abs(az) <= 90]
-    order = azes * reps
+        azimuths = [azimuth for azimuth in azimuths if abs(azimuth) <= 90]
+    order = azimuths * reps
     random.Random(seed).shuffle(order)
     return order
 
 
 def token_seed(base_seed, trial_index):
-    """Per-trial stimulus token seed -- reproducible, distinct per trial."""
+    """Return a reproducible, distinct stimulus seed for a trial."""
     return base_seed * 100003 + trial_index
 
 
-# ---- static ----
+def _cmaa_history(trials):
+    return [(trial["delta"], bool(trial["correct"])) for trial in trials]
+
+
+def _cmaa_trial_spec(seed, trial_index, posterior):
+    high_side = random.Random(seed * 7919 + trial_index).choice([-1, 1])
+    return {
+        "done": False,
+        "trial_index": trial_index,
+        "delta": cmaa.next_delta(posterior),
+        "high_side": high_side,
+        "n": trial_index,
+    }
+
+
+def _cmaa_state(session_id):
+    session = db.get_session(session_id)
+    if not session:
+        return None
+    config = json.loads(session["config_json"])
+    trials = db.get_cmaa_trials(session_id)
+    history = _cmaa_history(trials)
+    posterior = cmaa.posterior_from_history(history)
+    if cmaa.is_done(history, posterior):
+        return {
+            "done": True,
+            "estimate": cmaa.estimate(posterior),
+            "n": len(history),
+        }
+    return _cmaa_trial_spec(config["seed"], len(history), posterior)
+
+
+# ---- static -----------------------------------------------------------------
+
 @app.route("/")
 def index():
     return send_from_directory("static", "index.html")
 
 
-# ---- setup data ----
+# ---- setup data --------------------------------------------------------------
+
 @app.route("/api/devices")
 def devices():
     return jsonify(audio.list_output_devices())
@@ -60,28 +93,29 @@ def stimuli():
 def wavinfo():
     try:
         return jsonify(audio.wav_info(request.args.get("name", "")))
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+    except Exception as error:
+        return jsonify({"error": str(error)}), 400
 
 
 @app.route("/stimuli/<path:name>")
 def stimuli_file(name):
-    """Serve a stimulus WAV for the browser panner to fetch+decode."""
     return send_from_directory("stimuli", name)
 
 
-# ---- session lifecycle ----
+# ---- localization session lifecycle -----------------------------------------
+
 @app.route("/api/session", methods=["POST"])
 def create_session():
-    d = request.get_json()
-    step = float(d.get("azimuth_step", 30))
-    reps = int(d.get("reps", 4))
+    data = request.get_json()
+    step = float(data.get("azimuth_step", 30))
+    reps = int(data.get("reps", 4))
     seed = random.randrange(1, 2**31)
-    output_mode = d.get("output_mode", "bed71")
-    if output_mode not in {"bed71", "folddown", "stereo"}:
+    output_mode = data.get("output_mode", "bed71")
+    if output_mode not in OUTPUT_MODES:
         return jsonify({"error": f"Unknown output mode '{output_mode}'."}), 400
-    stimulus = d.get("stimulus", "pink")
-    stim_region = d.get("stim_region")
+
+    stimulus = data.get("stimulus", "pink")
+    stim_region = data.get("stim_region")
     if stimulus == "pink" or stim_region is None:
         stim_region = None
     else:
@@ -89,53 +123,61 @@ def create_session():
             stim_region = [float(stim_region[0]), float(stim_region[1])]
         except (TypeError, ValueError, IndexError):
             return jsonify({"error": "stim_region must be [a, b]."}), 400
+
     config = {
-        "seed": seed, "azimuth_step": step, "reps": reps,
-        "peak_dbfs": float(d.get("peak_dbfs", -12.0)),
+        "seed": seed,
+        "azimuth_step": step,
+        "reps": reps,
+        "peak_dbfs": float(data.get("peak_dbfs", -12.0)),
         "stimulus": stimulus,
         "stim_region": stim_region,
         "render_path": "bed_7.1",
         "output_mode": output_mode,
-        "device_index": int(d["device_index"]),
+        "device_index": int(data["device_index"]),
     }
-    # Practice: 5 azimuths, one drawn per front/back-left/right region for coverage.
-    if d["mode"] == "practice":
+    if data["mode"] == "practice":
         order = _practice_order(step, seed, output_mode)
         config["reps"] = None
     else:
         order = trial_order(seed, step, reps, output_mode)
 
-    sid = db.create_session(d["participant"], d["condition"], d["device_name"],
-                            d["mode"], config, _now())
-    return jsonify({"session_id": sid, "trial_order": order, "config": config,
-                    "completed": []})
+    session_id = db.create_session(
+        data["participant"], data["condition"], data["device_name"],
+        data["mode"], config, _now(),
+    )
+    return jsonify({
+        "session_id": session_id,
+        "trial_order": order,
+        "config": config,
+        "completed": [],
+    })
 
 
 def _practice_order(step, seed, output_mode="bed71"):
-    """5 practice azimuths, covering available directional regions."""
+    """Return five practice azimuths covering available directional regions."""
     grid = metrics.grid_azimuths(step)
     if output_mode == "stereo":
-        grid = [a for a in grid if abs(a) <= 90]
+        grid = [azimuth for azimuth in grid if abs(azimuth) <= 90]
         regions = {
-            "R": [a for a in grid if 0 < a <= 90],
-            "L": [a for a in grid if -90 <= a < 0],
+            "R": [azimuth for azimuth in grid if 0 < azimuth <= 90],
+            "L": [azimuth for azimuth in grid if -90 <= azimuth < 0],
         }
         rng = random.Random(seed)
-        picks = [rng.choice(v) for v in regions.values() if v]
+        picks = [rng.choice(values) for values in regions.values() if values]
         remaining = list(grid)
         while len(picks) < 5 and remaining:
             picks.append(rng.choice(remaining))
         rng.shuffle(picks)
         return picks[:5]
 
-    quads = {
-        "FR": [a for a in grid if 0 < a < 90],
-        "BR": [a for a in grid if 90 < a < 180],
-        "BL": [a for a in grid if -180 < a < -90],
-        "FL": [a for a in grid if -90 < a < 0],
+    quadrants = {
+        "FR": [azimuth for azimuth in grid if 0 < azimuth < 90],
+        "BR": [azimuth for azimuth in grid if 90 < azimuth < 180],
+        "BL": [azimuth for azimuth in grid if -180 < azimuth < -90],
+        "FL": [azimuth for azimuth in grid if -90 < azimuth < 0],
     }
     rng = random.Random(seed)
-    picks = [rng.choice(v) for v in quads.values() if v]
+    picks = [rng.choice(values) for values in quadrants.values() if values]
     picks.append(rng.choice(grid))
     rng.shuffle(picks)
     return picks[:5]
@@ -143,39 +185,47 @@ def _practice_order(step, seed, output_mode="bed71"):
 
 @app.route("/api/session/<int:sid>/resume")
 def resume_session(sid):
-    s = db.get_session(sid)
-    if not s:
+    session = db.get_session(sid)
+    if not session:
         return jsonify({"error": "not found"}), 404
-    import json
-    cfg = json.loads(s["config_json"])
-    output_mode = cfg.get("output_mode", "bed71")
-    if cfg["reps"] is None:
-        order = _practice_order(cfg["azimuth_step"], cfg["seed"], output_mode)
+    config = json.loads(session["config_json"])
+    output_mode = config.get("output_mode", "bed71")
+    if config["reps"] is None:
+        order = _practice_order(
+            config["azimuth_step"], config["seed"], output_mode
+        )
     else:
-        order = trial_order(cfg["seed"], cfg["azimuth_step"], cfg["reps"], output_mode)
-    done = db.completed_trial_indices(sid)
-    return jsonify({"session_id": sid, "trial_order": order, "config": cfg,
-                    "completed": sorted(done), "session": s})
+        order = trial_order(
+            config["seed"], config["azimuth_step"], config["reps"], output_mode
+        )
+    completed = db.completed_trial_indices(sid)
+    return jsonify({
+        "session_id": sid,
+        "trial_order": order,
+        "config": config,
+        "completed": sorted(completed),
+        "session": session,
+    })
 
 
 @app.route("/api/play", methods=["POST"])
 def play():
-    """Play a panned stimulus (blocking). Body: device_index, target_az, stimulus,
-    peak_dbfs, seed, output_mode. Returns after playback finishes."""
-    d = request.get_json()
+    data = request.get_json()
     try:
-        region = d.get("stim_region")
+        region = data.get("stim_region")
         region = tuple(region) if region is not None else None
-        stim = audio.make_stimulus(
-            d.get("stimulus", "pink"), int(d["seed"]), region=region
+        stimulus = audio.make_stimulus(
+            data.get("stimulus", "pink"), int(data["seed"]), region=region
         )
         frame = audio.render_output(
-            stim, float(d["target_az"]), float(d.get("peak_dbfs", -12.0)),
-            d.get("output_mode", "bed71")
+            stimulus,
+            float(data["target_az"]),
+            float(data.get("peak_dbfs", -12.0)),
+            data.get("output_mode", "bed71"),
         )
-        audio.play_frame(frame, int(d["device_index"]))
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        audio.play_frame(frame, int(data["device_index"]))
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
     return jsonify({"ok": True})
 
 
@@ -185,17 +235,120 @@ def stop():
     return jsonify({"ok": True})
 
 
-# ---- HRTF object-panner sandbox (backend C) ----
+# ---- CMAA session lifecycle --------------------------------------------------
+
+@app.route("/api/cmaa/session", methods=["POST"])
+def create_cmaa_session():
+    data = request.get_json()
+    output_mode = data.get("output_mode", "folddown")
+    if output_mode not in OUTPUT_MODES:
+        return jsonify({"error": f"Unknown output mode '{output_mode}'."}), 400
+
+    seed = random.randrange(1, 2**31)
+    config = {
+        "seed": seed,
+        "output_mode": output_mode,
+        "peak_dbfs": float(data.get("peak_dbfs", -12.0)),
+        "ref_az": float(data.get("ref_az", 0.0)),
+        "test_type": "cmaa",
+    }
+    session_id = db.create_session(
+        data["participant"],
+        data["condition"],
+        data["device_name"],
+        "cmaa",
+        config,
+        _now(),
+    )
+    return jsonify({"session_id": session_id, "config": config})
+
+
+@app.route("/api/cmaa/state/<int:sid>")
+def cmaa_state(sid):
+    state = _cmaa_state(sid)
+    if state is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(state)
+
+
+@app.route("/api/cmaa/play", methods=["POST"])
+def cmaa_play():
+    data = request.get_json()
+    try:
+        frame = audio.render_cmaa(
+            float(data["ref_az"]),
+            float(data["delta"]),
+            int(data["high_side"]),
+            float(data["peak_dbfs"]),
+            data["output_mode"],
+            int(data["seed"]),
+        )
+        audio.play_frame(frame, int(data["device_index"]))
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    return jsonify({"ok": True})
+
+
+@app.route("/api/cmaa/trial", methods=["POST"])
+def save_cmaa_trial():
+    data = request.get_json()
+    response_side = int(data["response_side"])
+    high_side = int(data["high_side"])
+    if response_side not in (-1, 1):
+        return jsonify({"error": "response_side must be -1 or +1."}), 400
+    if high_side not in (-1, 1):
+        return jsonify({"error": "high_side must be -1 or +1."}), 400
+
+    session_id = int(data["session_id"])
+    trial = {
+        "trial_index": int(data["trial_index"]),
+        "delta": float(data["delta"]),
+        "high_side": high_side,
+        "response_side": response_side,
+        "correct": int(response_side == high_side),
+        "response_ms": int(data["response_ms"]),
+    }
+    db.save_cmaa_trial(session_id, trial)
+    state = _cmaa_state(session_id)
+    if state is None:
+        return jsonify({"error": "not found"}), 404
+
+    result = {"correct": trial["correct"], **state}
+    return jsonify(result)
+
+
+@app.route("/api/cmaa/report/<int:sid>")
+def cmaa_report(sid):
+    session = db.get_session(sid)
+    if not session:
+        return jsonify({"error": "not found"}), 404
+    trials = db.get_cmaa_trials(sid)
+    posterior = cmaa.posterior_from_history(_cmaa_history(trials))
+    estimate = cmaa.estimate(posterior) if trials else None
+    columns = [
+        "trial_index", "delta", "high_side", "response_side", "correct", "response_ms"
+    ]
+    return jsonify({
+        "session": session,
+        "n": len(trials),
+        "estimate": estimate,
+        "trials": [
+            {column: trial[column] for column in columns}
+            for trial in trials
+        ],
+    })
+
+
+# ---- HRTF object-panner sandbox ---------------------------------------------
+
 @app.route("/api/hrtf/play", methods=["POST"])
 def hrtf_play():
-    """Render a scene of positioned sources to binaural and loop it. Body:
-    device_index, objects:[{az, el, dist, stim}]. Stereo out -- no 7.1 needed."""
-    d = request.get_json()
+    data = request.get_json()
     try:
-        buf = audio_hrtf.render_scene(d.get("objects", []))
-        audio_hrtf.LOOPER.play(buf, int(d["device_index"]))
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        buffer = audio_hrtf.render_scene(data.get("objects", []))
+        audio_hrtf.LOOPER.play(buffer, int(data["device_index"]))
+    except Exception as error:
+        return jsonify({"error": str(error)}), 400
     return jsonify({"ok": True})
 
 
@@ -207,21 +360,21 @@ def hrtf_stop():
 
 @app.route("/api/trial", methods=["POST"])
 def save_trial():
-    d = request.get_json()
-    target = float(d["target_az"])
-    resp = float(d["response_az"])
+    data = request.get_json()
+    target = float(data["target_az"])
+    response = float(data["response_az"])
     trial = {
-        "trial_index": int(d["trial_index"]),
+        "trial_index": int(data["trial_index"]),
         "target_az": target,
-        "response_az": round(resp, 1),
-        "signed_error": round(metrics.signed_error(target, resp), 2),
-        "abs_error": round(metrics.abs_error(target, resp), 2),
-        "front_back_confusion": metrics.front_back_confusion(target, resp),
-        "left_right_confusion": metrics.left_right_confusion(target, resp),
-        "replay_count": int(d.get("replay_count", 0)),
-        "response_ms": int(d["response_ms"]),
+        "response_az": round(response, 1),
+        "signed_error": round(metrics.signed_error(target, response), 2),
+        "abs_error": round(metrics.abs_error(target, response), 2),
+        "front_back_confusion": metrics.front_back_confusion(target, response),
+        "left_right_confusion": metrics.left_right_confusion(target, response),
+        "replay_count": int(data.get("replay_count", 0)),
+        "response_ms": int(data["response_ms"]),
     }
-    db.save_trial(int(d["session_id"]), trial)
+    db.save_trial(int(data["session_id"]), trial)
     return jsonify(trial)
 
 
@@ -231,102 +384,170 @@ def complete(sid):
     return jsonify({"ok": True})
 
 
-# ---- reporting ----
+# ---- reporting ---------------------------------------------------------------
+
 @app.route("/api/sessions")
 def sessions():
     return jsonify(db.list_sessions())
 
 
 def _session_metrics(sid):
-    """Compute report metrics for one session from committed trials."""
-    s = db.get_session(sid)
+    session = db.get_session(sid)
     trials = db.get_trials(sid)
-    import json
-    step = json.loads(s["config_json"]).get("azimuth_step", 30)
-    return _metrics_from_trials(trials, step, s), s
+    step = json.loads(session["config_json"]).get("azimuth_step", 30)
+    return _metrics_from_trials(trials, step, session), session
 
 
-def _metrics_from_trials(trials, step, s=None):
+def _metrics_from_trials(trials, step, session=None):
     if not trials:
-        return {"n": 0, "mae": None, "per_az": {}, "fb_rate": None, "lr_rate": None,
-                "heatmap": [], "step": step}
-    maes = [t["abs_error"] for t in trials]
+        return {
+            "n": 0,
+            "mae": None,
+            "per_az": {},
+            "fb_rate": None,
+            "lr_rate": None,
+            "heatmap": [],
+            "step": step,
+        }
+
+    absolute_errors = [trial["abs_error"] for trial in trials]
     per_az = {}
-    for t in trials:
-        per_az.setdefault(t["target_az"], []).append(t["abs_error"])
-    per_az_mae = {az: sum(v) / len(v) for az, v in per_az.items()}
+    for trial in trials:
+        per_az.setdefault(trial["target_az"], []).append(trial["abs_error"])
+    per_az_mae = {
+        azimuth: sum(values) / len(values)
+        for azimuth, values in per_az.items()
+    }
 
-    # Confusion rates use only eligible trials (rule exclusions already stored as False,
-    # but rate denominators should exclude ineligible targets).
-    fb_elig = [t for t in trials if abs(abs(metrics.norm180(t["target_az"])) - 90) > 1e-6]
-    lr_elig = [t for t in trials if abs(metrics.norm180(t["target_az"])) > 1e-6
-               and abs(abs(metrics.norm180(t["target_az"])) - 180) > 1e-6]
-    fb_rate = (sum(t["front_back_confusion"] for t in fb_elig) / len(fb_elig)) if fb_elig else None
-    lr_rate = (sum(t["left_right_confusion"] for t in lr_elig) / len(lr_elig)) if lr_elig else None
+    fb_eligible = [
+        trial for trial in trials
+        if abs(abs(metrics.norm180(trial["target_az"])) - 90) > 1e-6
+    ]
+    lr_eligible = [
+        trial for trial in trials
+        if abs(metrics.norm180(trial["target_az"])) > 1e-6
+        and abs(abs(metrics.norm180(trial["target_az"])) - 180) > 1e-6
+    ]
+    fb_rate = (
+        sum(trial["front_back_confusion"] for trial in fb_eligible)
+        / len(fb_eligible)
+        if fb_eligible else None
+    )
+    lr_rate = (
+        sum(trial["left_right_confusion"] for trial in lr_eligible)
+        / len(lr_eligible)
+        if lr_eligible else None
+    )
 
-    # Heatmap: target bin x response bin counts.
     grid = metrics.grid_azimuths(step)
-    idx = {az: i for i, az in enumerate(grid)}
-    hm = [[0] * len(grid) for _ in grid]
-    for t in trials:
-        ti = idx.get(metrics.bin_az(t["target_az"], step))
-        ri = idx.get(metrics.bin_az(t["response_az"], step))
-        if ti is not None and ri is not None:
-            hm[ti][ri] += 1
+    index = {azimuth: i for i, azimuth in enumerate(grid)}
+    heatmap = [[0] * len(grid) for _ in grid]
+    for trial in trials:
+        target_index = index.get(metrics.bin_az(trial["target_az"], step))
+        response_index = index.get(metrics.bin_az(trial["response_az"], step))
+        if target_index is not None and response_index is not None:
+            heatmap[target_index][response_index] += 1
+
     return {
         "n": len(trials),
-        "mae": round(sum(maes) / len(maes), 2),
-        "per_az": {str(k): round(v, 2) for k, v in per_az_mae.items()},
+        "mae": round(sum(absolute_errors) / len(absolute_errors), 2),
+        "per_az": {
+            str(key): round(value, 2) for key, value in per_az_mae.items()
+        },
         "fb_rate": round(fb_rate, 3) if fb_rate is not None else None,
         "lr_rate": round(lr_rate, 3) if lr_rate is not None else None,
-        "heatmap": hm, "grid": grid, "step": step,
+        "heatmap": heatmap,
+        "grid": grid,
+        "step": step,
     }
 
 
 @app.route("/api/report/<int:sid>")
 def report(sid):
-    m, s = _session_metrics(sid)
-    return jsonify({"session": s, "metrics": m})
+    session_metrics, session = _session_metrics(sid)
+    return jsonify({"session": session, "metrics": session_metrics})
 
 
 @app.route("/api/compare")
 def compare():
-    """?ids=1,2,3 -> per-session metrics + pooled-per-condition (same-step sessions only)."""
-    ids = [int(x) for x in request.args.get("ids", "").split(",") if x]
-    import json
-    cols = []
+    """Return per-session metrics and pooled localization conditions."""
+    ids = [
+        int(value)
+        for value in request.args.get("ids", "").split(",")
+        if value
+    ]
+    columns = []
     by_condition = {}
+    localization_sessions = []
+
     for sid in ids:
-        s = db.get_session(sid)
-        if not s:
+        session = db.get_session(sid)
+        if not session:
             continue
-        step = json.loads(s["config_json"]).get("azimuth_step", 30)
+
+        if session["mode"] == "cmaa":
+            trials = db.get_cmaa_trials(sid)
+            posterior = cmaa.posterior_from_history(_cmaa_history(trials))
+            result = cmaa.estimate(posterior) if trials else None
+            cmaa_metrics = {
+                "type": "cmaa",
+                "n": len(trials),
+                "threshold": result["threshold"] if result else None,
+                "ci_lo": result["ci_lo"] if result else None,
+                "ci_hi": result["ci_hi"] if result else None,
+            }
+            columns.append({
+                "label": f"#{sid} {session['participant']}/{session['condition']}",
+                "metrics": cmaa_metrics,
+            })
+            continue
+
+        step = json.loads(session["config_json"]).get("azimuth_step", 30)
         trials = db.get_trials(sid)
-        cols.append({"label": f"#{sid} {s['participant']}/{s['condition']}",
-                     "metrics": _metrics_from_trials(trials, step)})
-        by_condition.setdefault((s["condition"], step), []).extend(trials)
+        localization_metrics = _metrics_from_trials(trials, step)
+        localization_metrics["type"] = "loc"
+        columns.append({
+            "label": f"#{sid} {session['participant']}/{session['condition']}",
+            "metrics": localization_metrics,
+        })
+        by_condition.setdefault((session["condition"], step), []).extend(trials)
+        localization_sessions.append((session["condition"], step))
+
     pooled = []
-    for (cond, step), trials in by_condition.items():
-        n_sessions = sum(1 for sid in ids
-                         if (db.get_session(sid) or {}).get("condition") == cond)
+    for (condition, step), trials in by_condition.items():
+        n_sessions = sum(
+            1 for key in localization_sessions
+            if key == (condition, step)
+        )
         if n_sessions >= 2:
-            pooled.append({"label": f"POOLED {cond}",
-                           "metrics": _metrics_from_trials(trials, step)})
-    return jsonify({"columns": cols + pooled})
+            pooled_metrics = _metrics_from_trials(trials, step)
+            pooled_metrics["type"] = "loc"
+            pooled.append({
+                "label": f"POOLED {condition}",
+                "metrics": pooled_metrics,
+            })
+    return jsonify({"columns": columns + pooled})
 
 
 @app.route("/api/export/<int:sid>")
 def export_csv(sid):
     trials = db.get_trials(sid)
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    cols = ["trial_index", "target_az", "response_az", "signed_error", "abs_error",
-            "front_back_confusion", "left_right_confusion", "replay_count", "response_ms"]
-    w.writerow(cols)
-    for t in trials:
-        w.writerow([t[c] for c in cols])
-    return Response(buf.getvalue(), mimetype="text/csv",
-                    headers={"Content-Disposition": f"attachment; filename=session_{sid}.csv"})
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    columns = [
+        "trial_index", "target_az", "response_az", "signed_error", "abs_error",
+        "front_back_confusion", "left_right_confusion", "replay_count", "response_ms",
+    ]
+    writer.writerow(columns)
+    for trial in trials:
+        writer.writerow([trial[column] for column in columns])
+    return Response(
+        buffer.getvalue(),
+        mimetype="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=session_{sid}.csv"
+        },
+    )
 
 
 def open_browser():

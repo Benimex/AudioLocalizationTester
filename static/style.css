@@ -33,10 +33,14 @@ button.ghost { background: none; border-color: transparent; color: #555; }
 .disabled-field { opacity: .55; }
 
 .trial-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-#mode-badge { font-weight: 700; }
+#mode-badge, #cmaa-badge { font-weight: 700; }
 .trial-controls { display: flex; gap: 12px; justify-content: center; margin-top: 16px; }
 #circle-wrap, #probe-circle-wrap { display: flex; justify-content: center; }
 .feedback { text-align: center; margin-top: 14px; font-weight: 600; }
+.cmaa-btn { font-size: 22px; padding: 22px 44px; min-width: 160px; }
+.cmaa-row { display: flex; gap: 24px; justify-content: center; }
+#cmaa-question { text-align: center; font-size: 18px; margin: 36px 0 28px; }
+#cmaa-done { text-align: center; margin-top: 32px; }
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); color: #fff;
   display: flex; align-items: center; justify-content: center; font-size: 24px; }
 .overlay div { text-align: center; display: flex; flex-direction: column; gap: 16px; }
@@ -47,7 +51,7 @@ th { background: #f0f0f2; }
 
 svg text { font: 11px sans-serif; fill: #333; }
 .metric-block { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 16px;
-  margin-top: 16px; }
+  margin-top: 16px; overflow-x: auto; }
 .metric-block h3 { margin: 0 0 10px; }
 .big-num { font-size: 28px; font-weight: 700; }
 table.mini { width: auto; background: none; margin: 8px 0; }

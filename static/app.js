@@ -246,6 +246,7 @@ function estimateDuration() {
 
 $("start-practice").onclick = () => startSession("practice");
 $("start-main").onclick = () => startSession("main");
+$("start-cmaa").onclick = startCmaa;
 
 async function startSession(mode) {
   const devSel = $("device").selectedOptions[0];
@@ -355,6 +356,247 @@ async function finishSession() {
   alert(`Session complete: ${sess.completed.size} trials committed.`);
   showView("report");
 }
+
+// ---- CMAA separation flow ----
+let cm = null;
+let cmaaSpec = null;
+let cmaaTimerStart = 0;
+let cmaaReplayed = 0;
+let cmaaBusy = false;
+
+async function startCmaa() {
+  const devSel = $("device").selectedOptions[0];
+  if (!checkDevice($("device"), $("device-warn"), $("outmode"))) return;
+  if (!$("participant").value.trim()) { alert("Enter participant ID"); return; }
+
+  const body = {
+    participant: $("participant").value.trim(),
+    condition: $("condition").value.trim() || "unlabeled",
+    device_index: +devSel.value,
+    device_name: devSel.dataset.name,
+    output_mode: $("outmode").value,
+    peak_dbfs: +$("peak").value,
+    ref_az: 0,
+  };
+  const response = await fetch("/api/cmaa/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    alert(data.error || "Unable to start CMAA session.");
+    return;
+  }
+
+  cm = {
+    id: data.session_id,
+    config: data.config,
+    deviceIndex: +devSel.value,
+    practice: [[40, 1], [40, -1], [25, 1], [25, -1]],
+    practiceIdx: 0,
+    phase: "practice",
+  };
+  showView("cmaa");
+  $("cmaa-done").classList.add("hidden");
+  $("cmaa-question").classList.remove("hidden");
+  $("cmaa-left").classList.remove("hidden");
+  $("cmaa-right").classList.remove("hidden");
+  $("cmaa-replay").classList.remove("hidden");
+  $("cmaa-feedback").classList.add("hidden");
+  beginCmaaPractice();
+}
+
+function setCmaaControls(enabled) {
+  $("cmaa-left").disabled = !enabled;
+  $("cmaa-right").disabled = !enabled;
+  $("cmaa-replay").disabled = !enabled || cmaaReplayed >= 1;
+}
+
+async function cmaaPlay(spec, seed) {
+  const c = cm.config;
+  const response = await fetch("/api/cmaa/play", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      device_index: cm.deviceIndex,
+      ref_az: c.ref_az,
+      delta: spec.delta,
+      high_side: spec.high_side,
+      peak_dbfs: c.peak_dbfs,
+      output_mode: c.output_mode,
+      seed,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Unable to play CMAA stimulus.");
+}
+
+async function beginCmaaPractice() {
+  if (!cm || cm.phase !== "practice") return;
+  if (cm.practiceIdx >= cm.practice.length) {
+    cm.phase = "main";
+    $("cmaa-badge").textContent = "TEST";
+    $("cmaa-feedback").classList.add("hidden");
+    await loadCmaaState();
+    return;
+  }
+
+  const [delta, highSide] = cm.practice[cm.practiceIdx];
+  cmaaSpec = { delta, high_side: highSide };
+  cmaaReplayed = 0;
+  cmaaBusy = true;
+  setCmaaControls(false);
+  $("cmaa-badge").textContent = "PRACTICE";
+  $("cmaa-progress").textContent = `Practice ${cm.practiceIdx + 1} of ${cm.practice.length}`;
+  $("cmaa-status").textContent = "Playing…";
+  $("cmaa-feedback").classList.add("hidden");
+
+  try {
+    await cmaaPlay(cmaaSpec, cm.config.seed * 100003 - (cm.practiceIdx + 1));
+    cmaaTimerStart = performance.now();
+    cmaaBusy = false;
+    setCmaaControls(true);
+    $("cmaa-status").textContent = "清亮的聲音在左邊還是右邊?";
+  } catch (error) {
+    cmaaBusy = false;
+    $("cmaa-status").textContent = error.message;
+  }
+}
+
+async function loadCmaaState() {
+  if (!cm) return;
+  cmaaBusy = true;
+  setCmaaControls(false);
+  $("cmaa-status").textContent = "Loading…";
+  const response = await fetch(`/api/cmaa/state/${cm.id}`);
+  const state = await response.json();
+  if (!response.ok) {
+    cmaaBusy = false;
+    $("cmaa-status").textContent = state.error || "Unable to load CMAA state.";
+    return;
+  }
+  if (state.done) {
+    showCmaaDone(state.estimate, state.n);
+    return;
+  }
+  await beginCmaaMain(state);
+}
+
+async function beginCmaaMain(spec) {
+  cmaaSpec = spec;
+  cmaaReplayed = 0;
+  cmaaBusy = true;
+  setCmaaControls(false);
+  $("cmaa-badge").textContent = "TEST";
+  $("cmaa-progress").textContent = `Trial ${spec.n + 1} (20-40, adaptive)`;
+  $("cmaa-status").textContent = "Playing…";
+  $("cmaa-feedback").classList.add("hidden");
+
+  try {
+    await cmaaPlay(spec, cm.config.seed * 100003 + spec.trial_index);
+    cmaaTimerStart = performance.now();
+    cmaaBusy = false;
+    setCmaaControls(true);
+    $("cmaa-status").textContent = "清亮的聲音在左邊還是右邊?";
+  } catch (error) {
+    cmaaBusy = false;
+    $("cmaa-status").textContent = error.message;
+  }
+}
+
+async function answerCmaa(responseSide) {
+  if (!cm || !cmaaSpec || cmaaBusy) return;
+  cmaaBusy = true;
+  setCmaaControls(false);
+  const responseMs = Math.round(performance.now() - cmaaTimerStart);
+
+  if (cm.phase === "practice") {
+    const correct = responseSide === cmaaSpec.high_side;
+    const sideText = cmaaSpec.high_side === 1 ? "右邊" : "左邊";
+    $("cmaa-feedback").textContent = `${correct ? "正確" : "錯誤"} (清亮聲在${sideText})`;
+    $("cmaa-feedback").classList.remove("hidden");
+    $("cmaa-status").textContent = "";
+    await sleep(1600);
+    cm.practiceIdx++;
+    cmaaBusy = false;
+    beginCmaaPractice();
+    return;
+  }
+
+  $("cmaa-status").textContent = "Saving…";
+  const response = await fetch("/api/cmaa/trial", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: cm.id,
+      trial_index: cmaaSpec.trial_index,
+      delta: cmaaSpec.delta,
+      high_side: cmaaSpec.high_side,
+      response_side: responseSide,
+      response_ms: responseMs,
+    }),
+  });
+  const result = await response.json();
+  if (!response.ok) {
+    cmaaBusy = false;
+    $("cmaa-status").textContent = result.error || "Unable to save CMAA response.";
+    return;
+  }
+  if (result.done) {
+    showCmaaDone(result.estimate, result.n);
+    return;
+  }
+  cmaaBusy = false;
+  await beginCmaaMain(result);
+}
+
+$("cmaa-left").onclick = () => answerCmaa(-1);
+$("cmaa-right").onclick = () => answerCmaa(1);
+
+$("cmaa-replay").onclick = async () => {
+  if (!cm || !cmaaSpec || cmaaBusy || cmaaReplayed >= 1) return;
+  cmaaBusy = true;
+  cmaaReplayed = 1;
+  setCmaaControls(false);
+  $("cmaa-status").textContent = "Replaying…";
+  const seed = cm.phase === "practice"
+    ? cm.config.seed * 100003 - (cm.practiceIdx + 1)
+    : cm.config.seed * 100003 + cmaaSpec.trial_index;
+  try {
+    await cmaaPlay(cmaaSpec, seed);
+    cmaaTimerStart = performance.now();
+    cmaaBusy = false;
+    $("cmaa-left").disabled = false;
+    $("cmaa-right").disabled = false;
+    $("cmaa-replay").disabled = true;
+    $("cmaa-status").textContent = "清亮的聲音在左邊還是右邊?";
+  } catch (error) {
+    cmaaBusy = false;
+    $("cmaa-status").textContent = error.message;
+  }
+};
+
+function showCmaaDone(estimate, n) {
+  cmaaBusy = false;
+  setCmaaControls(false);
+  $("cmaa-progress").textContent = `${n} trials complete`;
+  $("cmaa-badge").textContent = "DONE";
+  $("cmaa-status").textContent = "";
+  $("cmaa-feedback").classList.add("hidden");
+  $("cmaa-question").classList.add("hidden");
+  $("cmaa-left").classList.add("hidden");
+  $("cmaa-right").classList.add("hidden");
+  $("cmaa-replay").classList.add("hidden");
+  $("cmaa-result").innerHTML = `<span class="big-num">${estimate.threshold.toFixed(1)}°</span>
+    separation threshold · CI ${estimate.ci_lo.toFixed(1)}°–${estimate.ci_hi.toFixed(1)}° · n=${n}`;
+  $("cmaa-done").classList.remove("hidden");
+}
+
+$("cmaa-to-report").onclick = () => {
+  showView("report");
+  loadSessions();
+};
 
 // ---- probe ----
 let probeCircle, loopTimer = null;

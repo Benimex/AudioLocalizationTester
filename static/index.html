@@ -51,6 +51,7 @@
   <div class="row">
     <button id="start-practice">Start Practice (5 trials)</button>
     <button id="start-main" class="primary">Start Main Session</button>
+    <button id="start-cmaa">Start Separation Test (CMAA)</button>
   </div>
 </section>
 
@@ -70,6 +71,29 @@
   <div id="feedback" class="feedback hidden"></div>
   <div id="paused-overlay" class="overlay hidden"><div>Paused
     <button id="resume-btn" class="primary">Resume</button></div></div>
+</section>
+
+<!-- CMAA -->
+<section id="cmaa" class="view">
+  <div class="trial-top">
+    <span id="cmaa-progress"></span>
+    <span id="cmaa-badge"></span>
+  </div>
+  <p id="cmaa-question">同時會聽到一低沉一清亮兩個聲音. 清亮的聲音在低沉聲音的哪一邊?</p>
+  <div class="cmaa-row">
+    <button id="cmaa-left" class="cmaa-btn" disabled>左邊</button>
+    <button id="cmaa-right" class="cmaa-btn" disabled>右邊</button>
+  </div>
+  <div class="trial-controls">
+    <button id="cmaa-replay" disabled>Replay (1x)</button>
+  </div>
+  <p id="cmaa-status" class="hint"></p>
+  <div id="cmaa-feedback" class="feedback hidden"></div>
+  <div id="cmaa-done" class="hidden">
+    <h3>Separation test complete</h3>
+    <p id="cmaa-result"></p>
+    <button id="cmaa-to-report">View report</button>
+  </div>
 </section>
 
 <!-- PROBE -->
