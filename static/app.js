@@ -2,6 +2,117 @@
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+function wavTrim(canvasId, timesId, wrapId) {
+  const canvas = $(canvasId);
+  const ctx = canvas.getContext("2d");
+  const times = $(timesId);
+  const wrap = $(wrapId);
+  let peaks = [], duration = 0, a = 0, b = 0, active = false, dragging = null;
+  let loadSerial = 0;
+
+  function draw() {
+    const w = canvas.width, h = canvas.height;
+    ctx.fillStyle = "#0f1116";
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.strokeStyle = "#4a5570";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i < peaks.length; i++) {
+      const x = (i + 0.5) * w / peaks.length;
+      const half = peaks[i] * (h / 2 - 3);
+      ctx.moveTo(x, h / 2 - half);
+      ctx.lineTo(x, h / 2 + half);
+    }
+    ctx.stroke();
+
+    if (!active || duration <= 0) return;
+    const ax = a / duration * w;
+    const bx = b / duration * w;
+    ctx.fillStyle = "rgba(43,108,255,.22)";
+    ctx.fillRect(ax, 0, bx - ax, h);
+    ctx.fillStyle = "#2b6cff";
+    ctx.fillRect(ax - 2, 0, 4, h);
+    ctx.fillRect(bx - 2, 0, 4, h);
+  }
+
+  function update() {
+    times.textContent = `A ${a.toFixed(2)}s · B ${b.toFixed(2)}s / dur ${duration.toFixed(2)}s`;
+    draw();
+  }
+
+  async function load(name) {
+    const serial = ++loadSerial;
+    if (!name.toLowerCase().endsWith(".wav")) {
+      active = false;
+      peaks = [];
+      duration = 0;
+      a = b = 0;
+      wrap.classList.add("hidden");
+      return;
+    }
+    try {
+      const response = await fetch(`/api/wavinfo?name=${encodeURIComponent(name)}`);
+      const info = await response.json();
+      if (!response.ok) throw new Error(info.error || "Unable to load WAV information.");
+      if (serial !== loadSerial) return;
+      peaks = info.peaks;
+      duration = info.duration;
+      a = 0;
+      b = duration;
+      active = true;
+      wrap.classList.remove("hidden");
+      update();
+    } catch (e) {
+      if (serial !== loadSerial) return;
+      active = false;
+      peaks = [];
+      duration = 0;
+      a = b = 0;
+      wrap.classList.add("hidden");
+      alert(e.message);
+    }
+  }
+
+  function pointerTime(ev) {
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.max(0, Math.min(rect.width, ev.clientX - rect.left));
+    return x / rect.width * duration;
+  }
+
+  canvas.addEventListener("pointerdown", (ev) => {
+    if (!active || duration <= 0) return;
+    const t = pointerTime(ev);
+    dragging = Math.abs(t - a) <= Math.abs(t - b) ? "a" : "b";
+    canvas.setPointerCapture(ev.pointerId);
+    ev.preventDefault();
+  });
+
+  canvas.addEventListener("pointermove", (ev) => {
+    if (!dragging || !active) return;
+    const t = pointerTime(ev);
+    const gap = Math.min(0.05, duration);
+    if (dragging === "a") a = Math.max(0, Math.min(t, b - gap));
+    else b = Math.min(duration, Math.max(t, a + gap));
+    update();
+  });
+
+  function endDrag(ev) {
+    if (!dragging) return;
+    if (canvas.hasPointerCapture(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId);
+    dragging = null;
+  }
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+
+  return {
+    load,
+    region() {
+      return active ? [a, b] : null;
+    },
+  };
+}
+
 // ---- nav ----
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => showView(b.dataset.view));
 function showView(name) {
@@ -75,6 +186,9 @@ function makeCircle(onPick) {
 
 // ---- setup ----
 let devices = [];
+const setupTrim = wavTrim("setup-wave", "setup-wave-times", "setup-wavtrim");
+const probeTrim = wavTrim("probe-wave", "probe-wave-times", "probe-wavtrim");
+
 async function initSetup() {
   devices = await (await fetch("/api/devices")).json();
   const fill = (sel) => {
@@ -88,23 +202,33 @@ async function initSetup() {
     }
   };
   fill($("device")); fill($("probe-device"));
-  checkDevice($("device"), $("device-warn"));
-  checkDevice($("probe-device"), $("probe-device-warn"));
+  checkDevice($("device"), $("device-warn"), $("outmode"));
+  checkDevice($("probe-device"), $("probe-device-warn"), $("probe-outmode"));
 
   const stims = await (await fetch("/api/stimuli")).json();
   const fillS = (sel) => { sel.innerHTML = ""; stims.forEach(s => { const o = document.createElement("option"); o.value = s; o.textContent = s; sel.appendChild(o); }); };
   fillS($("stimulus")); fillS($("probe-stimulus"));
+  $("stimulus").onchange = () => setupTrim.load($("stimulus").value);
+  $("probe-stimulus").onchange = () => probeTrim.load($("probe-stimulus").value);
+  setupTrim.load($("stimulus").value);
+  probeTrim.load($("probe-stimulus").value);
 
-  $("device").onchange = () => checkDevice($("device"), $("device-warn"));
-  $("probe-device").onchange = () => checkDevice($("probe-device"), $("probe-device-warn"));
+  $("device").onchange = () => checkDevice($("device"), $("device-warn"), $("outmode"));
+  $("probe-device").onchange = () => checkDevice($("probe-device"), $("probe-device-warn"), $("probe-outmode"));
+  $("outmode").onchange = () => {
+    checkDevice($("device"), $("device-warn"), $("outmode"));
+    estimateDuration();
+  };
+  $("probe-outmode").onchange = () =>
+    checkDevice($("probe-device"), $("probe-device-warn"), $("probe-outmode"));
   ["step", "reps"].forEach(id => $(id).oninput = estimateDuration);
   estimateDuration();
 }
 
-function checkDevice(sel, warnEl) {
+function checkDevice(sel, warnEl, outmodeSel) {
   const usable = sel.selectedOptions[0]?.dataset.usable === "1";
-  if (!usable) {
-    warnEl.textContent = "This endpoint will not accept an 8-channel stream. Enable 7.1 or a spatial-sound APO (Atmos/Sonic) on it before starting; the tool never downmixes.";
+  if (outmodeSel.value === "bed71" && !usable) {
+    warnEl.textContent = "This endpoint will not accept an 8-channel stream. Enable 7.1 or a spatial-sound APO (Atmos/Sonic) on it before starting.";
     warnEl.classList.remove("hidden");
     return false;
   }
@@ -113,7 +237,9 @@ function checkDevice(sel, warnEl) {
 }
 
 function estimateDuration() {
-  const n = (360 / +$("step").value) * +$("reps").value;
+  const step = +$("step").value;
+  const positions = $("outmode").value === "stereo" ? Math.floor(180 / step) + 1 : 360 / step;
+  const n = positions * +$("reps").value;
   const secs = Math.round(n * 7);
   $("duration-est").textContent = `${n} trials, ~${Math.floor(secs / 60)}m ${secs % 60}s at ~7s/trial.`;
 }
@@ -123,13 +249,15 @@ $("start-main").onclick = () => startSession("main");
 
 async function startSession(mode) {
   const devSel = $("device").selectedOptions[0];
-  if (!checkDevice($("device"), $("device-warn"))) return;
+  if (!checkDevice($("device"), $("device-warn"), $("outmode"))) return;
   if (!$("participant").value.trim()) { alert("Enter participant ID"); return; }
   const body = {
     participant: $("participant").value.trim(), condition: $("condition").value.trim() || "unlabeled",
     device_index: +devSel.value, device_name: devSel.dataset.name, mode,
     azimuth_step: +$("step").value, reps: +$("reps").value,
     peak_dbfs: +$("peak").value, stimulus: $("stimulus").value,
+    stim_region: setupTrim.region(),
+    output_mode: $("outmode").value,
   };
   const s = await (await fetch("/api/session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
   runSession({ id: s.session_id, order: s.trial_order, config: s.config, mode, completed: new Set(s.completed) });
@@ -184,7 +312,8 @@ async function playStimulus(az, i) {
   const c = sess.config;
   await fetch("/api/play", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ device_index: c.device_index, target_az: az,
-      stimulus: c.stimulus, peak_dbfs: c.peak_dbfs, seed: c.seed * 100003 + i }) });
+      stimulus: c.stimulus, stim_region: c.stim_region, peak_dbfs: c.peak_dbfs,
+      seed: c.seed * 100003 + i, output_mode: c.output_mode || "bed71" }) });
 }
 
 function onPick(az) { response = az; $("confirm").disabled = false; }
@@ -239,11 +368,19 @@ function initProbe() {
 
 async function probePlay() {
   const devSel = $("probe-device").selectedOptions[0];
-  if (!checkDevice($("probe-device"), $("probe-device-warn"))) return false;
+  if (!checkDevice($("probe-device"), $("probe-device-warn"), $("probe-outmode"))) return false;
+  const outputMode = $("probe-outmode").value;
+  let az = +$("probe-az").value;
+  if (outputMode === "stereo") {
+    az = Math.max(-90, Math.min(90, az));
+    $("probe-az").value = az;
+    probeCircle.setMarker(az);
+  }
   await fetch("/api/play", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ device_index: +devSel.value, target_az: +$("probe-az").value,
-      stimulus: $("probe-stimulus").value, peak_dbfs: +$("probe-peak").value,
-      seed: Math.floor(Math.random() * 1e9) }) });
+    body: JSON.stringify({ device_index: +devSel.value, target_az: az,
+      stimulus: $("probe-stimulus").value, stim_region: probeTrim.region(),
+      peak_dbfs: +$("probe-peak").value,
+      output_mode: outputMode, seed: Math.floor(Math.random() * 1e9) }) });
   return true;
 }
 
@@ -252,7 +389,9 @@ $("probe-loop").onclick = async () => {
   if (loopTimer) return;
   if (!await probePlay()) return;
   $("probe-stop").disabled = false;
-  loopTimer = setInterval(probePlay, 1450); // ~0.95s stimulus + gap
+  const region = probeTrim.region();
+  const interval = region ? (region[1] - region[0]) * 1000 + 500 : 1450;
+  loopTimer = setInterval(probePlay, interval);
 };
 $("probe-stop").onclick = async () => {
   clearInterval(loopTimer); loopTimer = null;

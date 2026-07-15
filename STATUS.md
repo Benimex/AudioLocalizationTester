@@ -1,6 +1,33 @@
 # STATUS
 
-as-of: 2026-07-12
+as-of: 2026-07-16
+
+## 2026-07-16: 2ch 輸出模式 (Codex GPT-5.6-Sol 撰寫, Claude 驗收)
+- 背景: Pelta Core 端點只收 2ch (Savitech APO 的 7.1 downmix 需 driver 宣告 7.1 device format,
+  此 SKU 未宣告); 遊戲的 7.1 選項實為遊戲內部 fold-down 成 2ch 再送出. 工具跟進此模式.
+- 新增 output_mode: bed71 (原 8ch, 預設) / folddown (7.1 pan 後標準係數降混 2ch, 全圓,
+  模擬遊戲鏈路) / stereo (constant-power 2ch pan, 前弧 ±90 限定).
+- 變更: audio.py (folddown_71_to_stereo, pan_stereo_gains, pan_to_stereo, render_output,
+  play_frame 依聲道數分 gate), main.py (/api/play + /api/session 收 output_mode, stereo 前弧
+  trial order + practice, resume 依 mode 重建), index.html (setup + probe 各加 outmode 下拉),
+  app.js (checkDevice 僅 bed71 檢 8ch, 時長估算, probe 傳 mode + stereo clamp).
+- 工作流: codex exec read-only 當作者輸出完整檔, Claude 套用 + 獨立驗收 (Windows 沙箱下
+  codex workspace-write 不可用, patch 被拒; read-only 作者模式繞開權限問題).
+- Verified: python audio.py/metrics.py/db.py -> selfcheck OK; node --check app.js -> OK;
+  flask test_client -> stereo 28 trials 全 |az|<=90, resume 一致, folddown 48, practice
+  stereo 5 picks 前弧, bogus mode 400; git status 僅 4 個允許檔案變更.
+- 未 commit. Pelta 實測下一步: folddown 模式 + Pelta 選 2ch, 跑 practice+main,
+  Savitech 環繞 ON/OFF 各一場比較.
+
+## 2026-07-16 (二): 主測試/probe 的 WAV A/B 區段 (Codex 撰寫, Claude 驗收)
+- Ben: 正式測試也要能用匯入音檔; 裁決: 匯入本已支援, loop 不進正式測驗 (計時方法學),
+  改加 A/B 區段修剪 — 長檔框一段, 每題只播該段, 記入 config (可重現).
+- 變更: audio.py (make_stimulus region 參數 + wav_info 波形摘要), main.py (/api/wavinfo,
+  session/play 傳 stim_region, pink 時存 null), index.html (setup/probe 波形容器),
+  app.js (wavTrim widget 工廠 x2, probe loop 間隔隨區段長度).
+- Verified: 四模組 selfcheck + node --check 過; API 驗收: wavinfo duration/600 peaks,
+  壞檔 400, region 進 config, pink 忽略 region, 0.5s 區段 = 24000 samples, 過短 region raise.
+- 未 commit.
 
 ## 現況
 - M1-M5 完工並自檢通過. M6 (elevation Phase 2 spike) 依計畫刻意未做, 滑桿灰掉附說明.

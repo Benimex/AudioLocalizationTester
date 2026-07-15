@@ -24,9 +24,11 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def trial_order(seed, azimuth_step, reps):
-    """Deterministic randomized trial order: each grid azimuth repeated `reps` times, shuffled."""
+def trial_order(seed, azimuth_step, reps, output_mode="bed71"):
+    """Deterministic randomized trial order: each eligible grid azimuth repeated and shuffled."""
     azes = metrics.grid_azimuths(azimuth_step)
+    if output_mode == "stereo":
+        azes = [az for az in azes if abs(az) <= 90]
     order = azes * reps
     random.Random(seed).shuffle(order)
     return order
@@ -54,6 +56,14 @@ def stimuli():
     return jsonify(audio.list_stimuli())
 
 
+@app.route("/api/wavinfo")
+def wavinfo():
+    try:
+        return jsonify(audio.wav_info(request.args.get("name", "")))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
 @app.route("/stimuli/<path:name>")
 def stimuli_file(name):
     """Serve a stimulus WAV for the browser panner to fetch+decode."""
@@ -67,19 +77,33 @@ def create_session():
     step = float(d.get("azimuth_step", 30))
     reps = int(d.get("reps", 4))
     seed = random.randrange(1, 2**31)
+    output_mode = d.get("output_mode", "bed71")
+    if output_mode not in {"bed71", "folddown", "stereo"}:
+        return jsonify({"error": f"Unknown output mode '{output_mode}'."}), 400
+    stimulus = d.get("stimulus", "pink")
+    stim_region = d.get("stim_region")
+    if stimulus == "pink" or stim_region is None:
+        stim_region = None
+    else:
+        try:
+            stim_region = [float(stim_region[0]), float(stim_region[1])]
+        except (TypeError, ValueError, IndexError):
+            return jsonify({"error": "stim_region must be [a, b]."}), 400
     config = {
         "seed": seed, "azimuth_step": step, "reps": reps,
         "peak_dbfs": float(d.get("peak_dbfs", -12.0)),
-        "stimulus": d.get("stimulus", "pink"),
+        "stimulus": stimulus,
+        "stim_region": stim_region,
         "render_path": "bed_7.1",
+        "output_mode": output_mode,
         "device_index": int(d["device_index"]),
     }
     # Practice: 5 azimuths, one drawn per front/back-left/right region for coverage.
     if d["mode"] == "practice":
-        order = _practice_order(step, seed)
+        order = _practice_order(step, seed, output_mode)
         config["reps"] = None
     else:
-        order = trial_order(seed, step, reps)
+        order = trial_order(seed, step, reps, output_mode)
 
     sid = db.create_session(d["participant"], d["condition"], d["device_name"],
                             d["mode"], config, _now())
@@ -87,17 +111,32 @@ def create_session():
                     "completed": []})
 
 
-def _practice_order(step, seed):
-    """5 practice azimuths: one each from the four quadrants + one extra, randomized."""
+def _practice_order(step, seed, output_mode="bed71"):
+    """5 practice azimuths, covering available directional regions."""
+    grid = metrics.grid_azimuths(step)
+    if output_mode == "stereo":
+        grid = [a for a in grid if abs(a) <= 90]
+        regions = {
+            "R": [a for a in grid if 0 < a <= 90],
+            "L": [a for a in grid if -90 <= a < 0],
+        }
+        rng = random.Random(seed)
+        picks = [rng.choice(v) for v in regions.values() if v]
+        remaining = list(grid)
+        while len(picks) < 5 and remaining:
+            picks.append(rng.choice(remaining))
+        rng.shuffle(picks)
+        return picks[:5]
+
     quads = {
-        "FR": [a for a in metrics.grid_azimuths(step) if 0 < a < 90],
-        "BR": [a for a in metrics.grid_azimuths(step) if 90 < a < 180],
-        "BL": [a for a in metrics.grid_azimuths(step) if -180 < a < -90],
-        "FL": [a for a in metrics.grid_azimuths(step) if -90 < a < 0],
+        "FR": [a for a in grid if 0 < a < 90],
+        "BR": [a for a in grid if 90 < a < 180],
+        "BL": [a for a in grid if -180 < a < -90],
+        "FL": [a for a in grid if -90 < a < 0],
     }
     rng = random.Random(seed)
     picks = [rng.choice(v) for v in quads.values() if v]
-    picks.append(rng.choice(metrics.grid_azimuths(step)))
+    picks.append(rng.choice(grid))
     rng.shuffle(picks)
     return picks[:5]
 
@@ -109,7 +148,11 @@ def resume_session(sid):
         return jsonify({"error": "not found"}), 404
     import json
     cfg = json.loads(s["config_json"])
-    order = trial_order(cfg["seed"], cfg["azimuth_step"], cfg["reps"])
+    output_mode = cfg.get("output_mode", "bed71")
+    if cfg["reps"] is None:
+        order = _practice_order(cfg["azimuth_step"], cfg["seed"], output_mode)
+    else:
+        order = trial_order(cfg["seed"], cfg["azimuth_step"], cfg["reps"], output_mode)
     done = db.completed_trial_indices(sid)
     return jsonify({"session_id": sid, "trial_order": order, "config": cfg,
                     "completed": sorted(done), "session": s})
@@ -118,11 +161,18 @@ def resume_session(sid):
 @app.route("/api/play", methods=["POST"])
 def play():
     """Play a panned stimulus (blocking). Body: device_index, target_az, stimulus,
-    peak_dbfs, seed. Returns after playback finishes."""
+    peak_dbfs, seed, output_mode. Returns after playback finishes."""
     d = request.get_json()
     try:
-        stim = audio.make_stimulus(d.get("stimulus", "pink"), int(d["seed"]))
-        frame = audio.pan_to_frame(stim, float(d["target_az"]), float(d.get("peak_dbfs", -12.0)))
+        region = d.get("stim_region")
+        region = tuple(region) if region is not None else None
+        stim = audio.make_stimulus(
+            d.get("stimulus", "pink"), int(d["seed"]), region=region
+        )
+        frame = audio.render_output(
+            stim, float(d["target_az"]), float(d.get("peak_dbfs", -12.0)),
+            d.get("output_mode", "bed71")
+        )
         audio.play_frame(frame, int(d["device_index"]))
     except ValueError as e:
         return jsonify({"error": str(e)}), 400

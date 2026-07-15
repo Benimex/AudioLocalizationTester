@@ -27,7 +27,19 @@
   <p id="device-warn" class="warn hidden"></p>
   <label>Participant ID <input id="participant" type="text"></label>
   <label>Condition label <input id="condition" type="text" placeholder="ROG_APO_v2"></label>
-  <label>Stimulus <select id="stimulus"></select></label>
+  <div class="row">
+    <label>Stimulus <select id="stimulus"></select></label>
+    <label>Output mode
+      <select id="outmode">
+        <option value="bed71" selected>7.1 bed (8ch endpoint)</option>
+        <option value="folddown">7.1 -> 2ch fold-down (game simulation)</option>
+        <option value="stereo">2ch stereo pan (front arc)</option>
+      </select>
+    </label>
+  </div>
+  <div id="setup-wavtrim" class="hidden"><canvas id="setup-wave" width="560" height="64"></canvas>
+  <p class="hint">Drag the two handles to choose the A/B segment played each trial. <span id="setup-wave-times"></span></p></div>
+  <p class="hint">Fold-down uses the full circle via a game-style downmix; stereo uses the front arc only.</p>
   <div class="row">
     <label>Azimuth step (deg)
       <select id="step"><option value="30" selected>30 (12 positions)</option>
@@ -70,8 +82,17 @@
   <div class="row">
     <label>Azimuth (deg) <input id="probe-az" type="number" value="45" min="-180" max="180" step="0.1"></label>
     <label>Stimulus <select id="probe-stimulus"></select></label>
+    <label>Output mode
+      <select id="probe-outmode">
+        <option value="bed71" selected>7.1 bed (8ch endpoint)</option>
+        <option value="folddown">7.1 -> 2ch fold-down (game simulation)</option>
+        <option value="stereo">2ch stereo pan (front arc)</option>
+      </select>
+    </label>
     <label>Peak dBFS <input id="probe-peak" type="number" value="-12" min="-40" max="0" step="1"></label>
   </div>
+  <div id="probe-wavtrim" class="hidden"><canvas id="probe-wave" width="560" height="64"></canvas>
+  <p class="hint">Drag the two handles to choose the A/B segment played each trial. <span id="probe-wave-times"></span></p></div>
   <label class="disabled-field">Elevation (deg)
     <input id="probe-elev" type="range" min="-90" max="90" value="0" disabled>
     <span class="hint">Phase 2 only. A 7.1 bed carries no height; elevation needs the Windows

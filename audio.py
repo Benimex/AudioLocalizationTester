@@ -72,6 +72,58 @@ def pan_to_frame(mono, target_az, peak_dbfs=-12.0):
     return frame
 
 
+def folddown_71_to_stereo(frame8):
+    """Fold an FL FR FC LFE BL BR SL SR frame down to stereo, dropping LFE."""
+    frame8 = np.asarray(frame8, dtype=np.float32)
+    if frame8.ndim != 2 or frame8.shape[1] != N_CH:
+        raise ValueError("7.1 fold-down requires an (n, 8) frame.")
+    stereo = np.empty((len(frame8), 2), dtype=np.float32)
+    stereo[:, 0] = (frame8[:, CH_INDEX["FL"]] +
+                    0.7071 * frame8[:, CH_INDEX["FC"]] +
+                    0.7071 * frame8[:, CH_INDEX["SL"]] +
+                    0.7071 * frame8[:, CH_INDEX["BL"]])
+    stereo[:, 1] = (frame8[:, CH_INDEX["FR"]] +
+                    0.7071 * frame8[:, CH_INDEX["FC"]] +
+                    0.7071 * frame8[:, CH_INDEX["SR"]] +
+                    0.7071 * frame8[:, CH_INDEX["BR"]])
+    source_peak = np.max(np.abs(frame8)) if frame8.size else 0.0
+    stereo_peak = np.max(np.abs(stereo)) if stereo.size else 0.0
+    if stereo_peak > 0.0:
+        stereo *= source_peak / stereo_peak
+    return stereo
+
+
+def pan_stereo_gains(az):
+    """Constant-power stereo gains for the front arc, clamped to [-90, 90]."""
+    az = np.clip(float(az), -90.0, 90.0)
+    p = (az + 90.0) / 180.0
+    return np.cos(p * np.pi / 2), np.sin(p * np.pi / 2)
+
+
+def pan_to_stereo(mono, az, peak_dbfs=-12.0):
+    """Expand a mono signal to a constant-power 2ch stereo frame."""
+    mono = np.asarray(mono, dtype=np.float32)
+    peak = np.max(np.abs(mono)) or 1.0
+    target_peak = 10.0 ** (peak_dbfs / 20.0)
+    mono = mono * (target_peak / peak)
+    left, right = pan_stereo_gains(az)
+    frame = np.empty((len(mono), 2), dtype=np.float32)
+    frame[:, 0] = mono * float(left)
+    frame[:, 1] = mono * float(right)
+    return frame
+
+
+def render_output(mono, az, peak_dbfs=-12.0, mode="bed71"):
+    """Render mono to an 8ch 7.1 bed, folded-down stereo, or direct stereo."""
+    if mode == "bed71":
+        return pan_to_frame(mono, az, peak_dbfs)
+    if mode == "folddown":
+        return folddown_71_to_stereo(pan_to_frame(mono, az, peak_dbfs))
+    if mode == "stereo":
+        return pan_to_stereo(mono, az, peak_dbfs)
+    raise ValueError(f"Unknown output mode '{mode}'.")
+
+
 # ---- Stimulus synthesis / loading -------------------------------------------
 
 def _raised_cosine_ramp(sig, ms=10.0):
@@ -114,17 +166,26 @@ def burst_stimulus(source_mono, gap_ms=100.0, n_bursts=3):
     return np.concatenate(parts)
 
 
-def make_stimulus(kind, seed, burst_ms=250.0):
+def make_stimulus(kind, seed, burst_ms=250.0, region=None):
     """Build a mono stimulus token. kind='pink' or a WAV filename in stimuli/.
 
     Pink: 3x250ms bursts, 100ms gaps, seeded fresh token.
-    WAV: whole file played once, ramped (no burst wrapping -- preserves transients).
+    WAV: selected region or whole file played once, ramped (no burst wrapping).
     """
     if kind == "pink":
         per = pink_noise(int(SR * burst_ms / 1000.0), seed)
         return burst_stimulus(per)
     # WAV file.
-    return _raised_cosine_ramp(load_wav(kind))
+    mono = load_wav(kind)
+    if region is not None and len(region) == 2:
+        a_sec, b_sec = float(region[0]), float(region[1])
+        if b_sec > a_sec:
+            start = max(0, min(len(mono), int(a_sec * SR)))
+            end = max(0, min(len(mono), int(b_sec * SR)))
+            mono = mono[start:end]
+            if len(mono) < int(SR * 0.03):
+                raise ValueError("Region too short.")
+    return _raised_cosine_ramp(mono)
 
 
 def load_wav(name):
@@ -139,6 +200,19 @@ def load_wav(name):
             raise ValueError(f"{name}: {w.getsampwidth()*8}-bit, need 16-bit PCM. Convert first.")
         frames = w.readframes(w.getnframes())
     return (np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0)
+
+
+def wav_info(name):
+    """Return duration and a compact 600-bin peak overview for a WAV stimulus."""
+    mono = load_wav(name)
+    n = len(mono)
+    peaks = []
+    for i in range(600):
+        start = i * n // 600
+        end = (i + 1) * n // 600
+        peak = float(np.max(np.abs(mono[start:end]))) if end > start else 0.0
+        peaks.append(round(peak, 3))
+    return {"duration": n / SR, "peaks": peaks}
 
 
 def list_stimuli():
@@ -198,17 +272,25 @@ def _wasapi_index():
 
 
 def play_frame(frame, device_index):
-    """Blocking playback of an 8ch frame to a WASAPI endpoint (shared mode).
-
-    Refuses if the endpoint exposes < 8 channels. Never downmixes.
-    """
+    """Blocking playback of an 8ch or 2ch frame to a WASAPI endpoint (shared mode)."""
+    frame = np.asarray(frame, dtype=np.float32)
+    if frame.ndim != 2 or frame.shape[1] not in (2, N_CH):
+        raise ValueError("Playback frame must have 2 or 8 channels.")
     dev = sd.query_devices(device_index)
-    if not supports_8ch(device_index):
-        raise ValueError(
-            f"Endpoint '{dev['name']}' will not accept an 8-channel stream. "
-            "Enable 7.1 (or a spatial-sound APO) on this endpoint before starting; "
-            "the tool never downmixes."
-        )
+    if frame.shape[1] == N_CH:
+        if not supports_8ch(device_index):
+            raise ValueError(
+                f"Endpoint '{dev['name']}' will not accept an 8-channel stream. "
+                "Enable 7.1 (or a spatial-sound APO) on this endpoint before starting."
+            )
+    else:
+        try:
+            sd.check_output_settings(device=device_index, channels=2,
+                                     samplerate=SR, dtype="float32")
+        except Exception:
+            raise ValueError(
+                f"Endpoint '{dev['name']}' will not accept a 2-channel 48000 Hz stream."
+            )
     sd.play(frame, samplerate=SR, device=device_index, blocking=True)
 
 
@@ -248,12 +330,58 @@ def _selfcheck():
     peak = np.max(np.abs(frame))
     assert abs(20 * np.log10(peak) - (-12.0)) < 0.5, f"peak {20*np.log10(peak):.2f} dBFS"
 
+    # FC folds equally to left and right.
+    fc = np.zeros((16, N_CH), dtype=np.float32)
+    fc[:, CH_INDEX["FC"]] = 0.5
+    folded = folddown_71_to_stereo(fc)
+    assert np.allclose(folded[:, 0], folded[:, 1]), "FC fold-down not equal"
+
+    # Direct stereo panning is constant-power, with equal gains at the center.
+    for az in range(-90, 91):
+        left, right = pan_stereo_gains(az)
+        assert abs(left * left + right * right - 1.0) < 1e-6, f"stereo power at {az}"
+    left, right = pan_stereo_gains(0)
+    assert abs(left - right) < 1e-6, "stereo center not equal"
+
+    # All render modes have the required channel count.
+    mono = pink_noise(4800, 2)
+    assert render_output(mono, 0, -12.0, "bed71").shape == (4800, 8)
+    assert render_output(mono, 0, -12.0, "folddown").shape == (4800, 2)
+    assert render_output(mono, 0, -12.0, "stereo").shape == (4800, 2)
+
+    # BL folds entirely to the left.
+    bl = np.zeros((16, N_CH), dtype=np.float32)
+    bl[:, CH_INDEX["BL"]] = 0.5
+    folded = folddown_71_to_stereo(bl)
+    assert np.max(np.abs(folded[:, 0])) > 0.0
+    assert np.max(np.abs(folded[:, 1])) == 0.0
+
     # Pink noise deterministic given seed.
     assert np.array_equal(pink_noise(1000, 42), pink_noise(1000, 42)), "seed not deterministic"
 
     # Burst stimulus length: 3x250ms + 2x100ms = 950ms.
     stim = make_stimulus("pink", 7)
     assert abs(len(stim) - int(SR * 0.95)) <= 1, f"stim len {len(stim)}"
+
+    # WAV regions and waveform information.
+    tmp_name = "_selfcheck_tmp.wav"
+    tmp_path = os.path.join(os.path.dirname(__file__), "stimuli", tmp_name)
+    os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
+    try:
+        samples = (np.sin(2 * np.pi * 440 * np.arange(SR * 2) / SR) * 32767).astype(np.int16)
+        with wave.open(tmp_path, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(SR)
+            w.writeframes(samples.tobytes())
+        stim = make_stimulus(tmp_name, 0, region=(0.5, 1.0))
+        assert len(stim) == 24000, f"region len {len(stim)}"
+        info = wav_info(tmp_name)
+        assert abs(info["duration"] - 2.0) < 1e-6, info["duration"]
+        assert len(info["peaks"]) == 600, len(info["peaks"])
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
     print("audio.py selfcheck OK")
 
