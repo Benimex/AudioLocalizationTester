@@ -13,6 +13,7 @@
     <button data-view="setup" class="active">Setup</button>
     <button data-view="probe">Manual Probe</button>
     <button data-view="panner">Object Panner</button>
+    <button data-view="eqedit">EQ Editor</button>
     <button data-view="report">Reports</button>
   </nav>
 </header>
@@ -386,6 +387,35 @@
   </div>
 </section>
 
+<!-- EQ EDITOR -->
+<section id="eqedit" class="view">
+  <h2>EQ Editor (parametric)</h2>
+  <p class="hint">拖點改 Fc 與 Gain, 滾輪改 Q, 空白處雙擊新增 PK, Delete 刪選中點. 曲線與試聽的
+    係數自算 (RBJ cookbook, fs=48000), 與伺服器測試一致. 試聽走瀏覽器輸出, 請把系統輸出設到耳機.</p>
+  <canvas id="eq-canvas" width="720" height="360"></canvas>
+  <div class="row eq-bar">
+    <button id="eq-add" class="ghost">+ 新增 filter</button>
+    <label>Preamp (dB) <input id="eq-preamp" type="number" value="0" step="0.5"></label>
+    <button id="eq-auto" class="ghost">自動 Preamp</button>
+  </div>
+  <table id="eq-table" class="mini"><thead><tr>
+    <th>#</th><th>Type</th><th>Fc (Hz)</th><th>Gain (dB)</th><th>Q</th><th></th></tr></thead>
+    <tbody id="eq-rows"></tbody></table>
+  <div class="row eq-bar">
+    <button id="eq-play" class="primary">試聽 (loop)</button>
+    <button id="eq-stop" disabled>Stop</button>
+    <label>刺激 <select id="eq-stim"></select></label>
+    <label>Output device <select id="eq-device"></select></label>
+  </div>
+  <div class="row eq-bar">
+    <label>檔名 <input id="eq-name" type="text" placeholder="my_eq"></label>
+    <button id="eq-save-btn" class="primary">存檔</button>
+    <label>已存 EQ <select id="eq-load-list"></select></label>
+    <button id="eq-load-btn" class="ghost">載入</button>
+    <span id="eq-save-status" class="hint"></span>
+  </div>
+</section>
+
 <!-- REPORT -->
 <section id="report" class="view">
   <h2>Reports</h2>
@@ -406,5 +436,6 @@
 <script src="vendor/three.min.js"></script>
 <script src="vendor/OrbitControls.js"></script>
 <script src="panner.js"></script>
+<script src="eq-editor.js"></script>
 </body>
 </html>

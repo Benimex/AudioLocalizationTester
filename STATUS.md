@@ -2,9 +2,22 @@
 
 as-of: 2026-07-17
 
-## NEXT UP: EQ Editor (計畫已定版未動工)
-- 讀 PLAN-EQ-EDITOR.md 直接執行. 設計/研究/分工/驗收/風險全在該檔, 勿重推導.
-- 關鍵: JS/HTML 含中文一律 Claude 手寫; Web Audio 原生 shelf 無視 Q, 用 RBJ 自算係數.
+## 2026-07-17 (二): EQ Editor 分頁 (PLAN-EQ-EDITOR.md 執行完畢)
+- 全數照計畫落地: static/eq-editor.js (新, 拖點/滾輪 Q/雙擊新增/Delete 刪, 數字列表雙向同步,
+  preamp 手動+auto, IIRFilterNode 試聽鏈 throttle 150ms 重建, 存/載/另存, 存檔後自動刷新
+  ABX/Pref 四個 EQ 下拉不用重整), index.html eqedit 區塊 + nav, main.py POST /api/eq/save
+  + GET /api/eq/load (檔名清洗 [A-Za-z0-9_-] 強制 .txt, 注入全 400), style.css, README.
+- 分工: opus agent 實作 (Claude 寫, 非 Codex, 中文零亂碼), opus 獨立對抗驗收, fable 收 2 個
+  low bug (表格輸入未 clamp 造成預覽/伺服器不一致; 刪列 selected index 錯位) 後自修.
+- Verified: 五模組 selfcheck 全 OK; node --check 四 JS 全 OK; id 交叉 + 無 U+FFFD;
+  API 端到端 (temp DB/temp EQ_DIR): save->list->load==parse_eqapo, 注入 ../x a/b a\b 空
+  x.txt.exe 等全 400, 存檔名可過 ABX session 驗證; JS/Python 係數 parity PK+LS+HS 多頻點
+  maxdiff 0.000000 dB (<0.1 目標).
+- UNVERIFIED — 手動項 (需人耳/瀏覽器): 拖點曲線即時動, 試聽即時變聲, 存檔後 ABX 下拉可選.
+  to confirm: python main.py -> EQ Editor 分頁操作一輪.
+- 待 Ben 確認: .gitignore 已加 eq/*.txt (同 stimuli WAV 政策). 若要 preset 進 repo, 刪該行.
+- Reviewer 遺留 (low, 未修, 可忍): save 不驗 text 內容 (壞檔 load 時才 400); Windows 保留
+  檔名 (NUL/CON) 可存但 load 400.
 
 ## 2026-07-17: 足音遮蔽偵測 + 偏好 A/B + PEQ 引擎 (research 選題, Ben 拍板 1+2+PEQ)
 - 選題依據: RTINGS/評測研究 — 機器指標 (FR/失真/PRTF) 是 rig 地盤; 無機器指標的知覺量

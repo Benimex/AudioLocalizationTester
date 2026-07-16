@@ -80,6 +80,18 @@ the APO under test. Double-processing (Windows Sonic + your APO) invalidates res
   filters) into `eq/`; select them per-spec in ABX and Preference to blind-test two tunings.
   Loudness matching (RMS) is on by default so you compare tuning, not volume.
 
+## EQ Editor
+
+The **EQ Editor** tab is a graphical parametric-EQ editor for the `eq/` profiles. Drag a
+band to change Fc/Gain, scroll to change Q, double-click empty space to add a peaking band,
+Delete to remove the selected one; a synced numeric table below edits the same state. The
+response curve and audition both compute biquad coefficients client-side with the RBJ
+cookbook (fs=48000), identical to the server's `audio.py`, so what you see matches what the
+tests render. Audition loops a stimulus through an `IIRFilterNode` chain to your browser
+output (set your system output to the headset). **Auto Preamp** sets preamp to cancel the
+composite peak. Save writes standard EQ APO text to `eq/<name>.txt` (name is sanitized to
+`[A-Za-z0-9_-]`); saved files immediately appear in the ABX and Preference EQ dropdowns.
+
 ## Reports
 
 Per session and via the Reports browser: overall + per-azimuth mean absolute error

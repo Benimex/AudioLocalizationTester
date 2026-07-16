@@ -2,7 +2,9 @@
 import csv
 import io
 import json
+import os
 import random
+import re
 import threading
 import webbrowser
 from datetime import datetime, timezone
@@ -203,6 +205,36 @@ def stimuli():
 @app.route("/api/eqs")
 def eqs():
     return jsonify(audio.list_eqs())
+
+
+_EQ_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+@app.route("/api/eq/save", methods=["POST"])
+def eq_save():
+    data = request.get_json() or {}
+    name = str(data.get("name", ""))
+    if not _EQ_NAME_RE.match(name):
+        return jsonify({
+            "error": "Name must contain only [A-Za-z0-9_-]."
+        }), 400
+    os.makedirs(audio.EQ_DIR, exist_ok=True)
+    path = os.path.join(audio.EQ_DIR, name + ".txt")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(str(data.get("text", "")))
+    return jsonify({"ok": True, "name": name + ".txt"})
+
+
+@app.route("/api/eq/load")
+def eq_load():
+    name = str(request.args.get("name", ""))
+    base = name[:-4] if name.lower().endswith(".txt") else name
+    if not _EQ_NAME_RE.match(base):
+        return jsonify({"error": "Invalid EQ name."}), 400
+    try:
+        return jsonify(audio.parse_eqapo(base + ".txt"))
+    except Exception as error:
+        return jsonify({"error": str(error)}), 400
 
 
 @app.route("/api/wavinfo")
