@@ -2,6 +2,18 @@
 
 as-of: 2026-07-17
 
+## 2026-07-17 (三): EQ Editor 手動驗收過 + LP/HP filter
+- Ben 實測 EQ Editor: 拖點/試聽/存檔全 OK (前節 UNVERIFIED 手動項結案).
+- 加 LP/HP (Ben 要求): audio.py _biquad_sos RBJ LPF/HPF (gain 無作用, q 塑膝, 0.707 =
+  Butterworth), _FILTER_RE 收 LP/HP/LPQ/HPQ 且 Gain 欄改 optional (LP 行無 Gain);
+  eq-editor.js rbjSos 同步 + 型別下拉 + LP/HP 時 gain 欄 disabled/拖曳鎖 0dB/序列化出
+  LPQ/HPQ 不帶 Gain; EXAMPLE.txt 註解補型別.
+- eq preset 範本: eq/EXAMPLE.txt 進 repo (.gitignore 加 !eq/EXAMPLE.txt 例外), Ben 已認可
+  eq/*.txt 排除政策.
+- Verified: LP/HP 驗收腳本 (scratchpad lphp_check.py) -> parse LP/LPQ/HPQ/HP 正確,
+  JS/Python parity maxdiff 0.000000 dB, 序列化 round-trip 過; audio/masked/cmaa selfcheck
+  OK; node --check OK.
+
 ## 2026-07-17 (二): EQ Editor 分頁 (PLAN-EQ-EDITOR.md 執行完畢)
 - 全數照計畫落地: static/eq-editor.js (新, 拖點/滾輪 Q/雙擊新增/Delete 刪, 數字列表雙向同步,
   preamp 手動+auto, IIRFilterNode 試聽鏈 throttle 150ms 重建, 存/載/另存, 存檔後自動刷新

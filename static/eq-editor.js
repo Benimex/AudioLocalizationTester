@@ -14,7 +14,13 @@
     const w0 = 2 * Math.PI * f.fc / fs;
     const cw = Math.cos(w0), sw = Math.sin(w0);
     let b0, b1, b2, a0, a1, a2;
-    if (type === "PK") {
+    if (type === "LP" || type === "HP") {
+      // RBJ LPF/HPF: gain ignored, q shapes the knee (0.707 = Butterworth).
+      const alpha = sw / (2 * f.q);
+      if (type === "LP") { b0 = (1 - cw) / 2; b1 = 1 - cw; b2 = (1 - cw) / 2; }
+      else { b0 = (1 + cw) / 2; b1 = -(1 + cw); b2 = (1 + cw) / 2; }
+      a0 = 1 + alpha; a1 = -2 * cw; a2 = 1 - alpha;
+    } else if (type === "PK") {
       const alpha = sw / (2 * f.q);
       b0 = 1 + alpha * A; b1 = -2 * cw; b2 = 1 - alpha * A;
       a0 = 1 + alpha / A; a1 = -2 * cw; a2 = 1 - alpha / A;
@@ -155,7 +161,8 @@
     const [x, y] = canvasXY(e);
     const f = state.filters[selected];
     f.fc = clamp(xf(clamp(x, padL, padL + plotW)), FMIN, FMAX);
-    f.gain = clamp(yg(clamp(y, padT, padT + plotH)), -DBMAX, DBMAX);
+    if (f.type !== "LP" && f.type !== "HP") // LP/HP 無 gain, 點固定在 0 dB 線
+      f.gain = clamp(yg(clamp(y, padT, padT + plotH)), -DBMAX, DBMAX);
     syncUI(); auditionRefresh();
   });
   const endDrag = () => { dragging = false; };
@@ -203,17 +210,22 @@
       const dot = `<span class="dot" style="background:${COLORS[i % COLORS.length]}"></span>`;
       tr.innerHTML =
         `<td>${dot}${i + 1}</td>` +
-        `<td><select data-k="type">${["PK", "LS", "HS"].map(t =>
+        `<td><select data-k="type">${["PK", "LS", "HS", "LP", "HP"].map(t =>
           `<option${t === f.type ? " selected" : ""}>${t}</option>`).join("")}</select></td>` +
         `<td><input data-k="fc" type="number" step="1" value="${round(f.fc, 1)}"></td>` +
-        `<td><input data-k="gain" type="number" step="0.5" value="${round(f.gain, 2)}"></td>` +
+        `<td><input data-k="gain" type="number" step="0.5" value="${round(f.gain, 2)}"${
+          f.type === "LP" || f.type === "HP" ? " disabled" : ""}></td>` +
         `<td><input data-k="q" type="number" step="0.1" value="${round(f.q, 3)}"></td>` +
         `<td><button class="ghost" data-del="1">×</button></td>`;
       tr.addEventListener("pointerdown", () => { if (selected !== i) { selected = i; syncUI(); } });
       tr.querySelectorAll("[data-k]").forEach(el => {
         el.addEventListener("input", () => {
           const k = el.dataset.k;
-          if (k === "type") f.type = el.value;
+          if (k === "type") {
+            f.type = el.value;
+            if (f.type === "LP" || f.type === "HP") f.gain = 0;
+            renderTable(); // 重畫 gain 欄 disabled 狀態
+          }
           else {
             const v = parseFloat(el.value);
             if (isFinite(v)) {
@@ -252,11 +264,13 @@
 
   // ---- save / load ----
   function serialize() {
-    const T = { PK: "PK", LS: "LSC", HS: "HSC" };
+    const T = { PK: "PK", LS: "LSC", HS: "HSC", LP: "LPQ", HP: "HPQ" };
     const lines = ["Preamp: " + round(state.preamp, 2) + " dB"];
     state.filters.forEach((f, i) => {
+      const gainPart = (f.type === "LP" || f.type === "HP")
+        ? "" : `Gain ${round(f.gain, 2)} dB `; // EQ APO LPQ/HPQ 行不帶 Gain
       lines.push(`Filter ${i + 1}: ON ${T[f.type] || "PK"} Fc ${round(f.fc, 1)} Hz `
-        + `Gain ${round(f.gain, 2)} dB Q ${round(f.q, 3)}`);
+        + gainPart + `Q ${round(f.q, 3)}`);
     });
     return lines.join("\n") + "\n";
   }

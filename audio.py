@@ -31,10 +31,10 @@ _PREAMP_RE = re.compile(
 )
 _FILTER_RE = re.compile(
     r"^\s*Filter\s+\d+\s*:\s*ON\s+"
-    r"(PK|LSC|HSC|LS|HS)\s+Fc\s+"
-    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\s*Hz\s+"
-    r"Gain\s+"
-    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\s*dB"
+    r"(PK|LSC|HSC|LS|HS|LPQ|HPQ|LP|HP)\s+Fc\s+"
+    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\s*Hz"
+    r"(?:\s+Gain\s+"
+    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\s*dB)?"
     r"(?:\s+Q\s+"
     r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?))?\s*$",
     re.IGNORECASE,
@@ -213,12 +213,17 @@ def parse_eqapo(name):
             filter_type = "LS"
         elif raw_type in ("HS", "HSC"):
             filter_type = "HS"
+        elif raw_type in ("LP", "LPQ"):
+            filter_type = "LP"
+        elif raw_type in ("HP", "HPQ"):
+            filter_type = "HP"
         else:
             filter_type = "PK"
 
         q = float(q_text) if q_text is not None else 0.707
         fc = float(fc_text)
-        gain = float(gain_text)
+        # LP/HP lines carry no Gain in EQ APO; gain is unused for them.
+        gain = float(gain_text) if gain_text is not None else 0.0
         if not np.isfinite(fc) or not np.isfinite(gain) or not np.isfinite(q):
             continue
         if fc <= 0.0 or fc >= SR / 2.0 or q <= 0.0:
@@ -244,7 +249,7 @@ def _biquad_sos(ftype, fc, gain_db, q, fs=SR):
     q = float(q)
     fs = float(fs)
 
-    if filter_type not in ("PK", "LS", "HS"):
+    if filter_type not in ("PK", "LS", "HS", "LP", "HP"):
         raise ValueError(f"Unsupported filter type '{ftype}'.")
     if frequency <= 0.0 or frequency >= fs / 2.0:
         raise ValueError("Filter frequency must be between 0 and Nyquist.")
@@ -256,7 +261,21 @@ def _biquad_sos(ftype, fc, gain_db, q, fs=SR):
     cosine = np.cos(omega)
     sine = np.sin(omega)
 
-    if filter_type == "PK":
+    if filter_type in ("LP", "HP"):
+        # RBJ LPF/HPF: gain is ignored, q shapes the knee (0.707 = Butterworth).
+        alpha = sine / (2.0 * q)
+        if filter_type == "LP":
+            b0 = (1.0 - cosine) / 2.0
+            b1 = 1.0 - cosine
+            b2 = (1.0 - cosine) / 2.0
+        else:
+            b0 = (1.0 + cosine) / 2.0
+            b1 = -(1.0 + cosine)
+            b2 = (1.0 + cosine) / 2.0
+        a0 = 1.0 + alpha
+        a1 = -2.0 * cosine
+        a2 = 1.0 - alpha
+    elif filter_type == "PK":
         alpha = sine / (2.0 * q)
         b0 = 1.0 + alpha * amplitude
         b1 = -2.0 * cosine
