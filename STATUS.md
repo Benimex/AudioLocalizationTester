@@ -2,6 +2,10 @@
 
 as-of: 2026-07-17
 
+## NEXT UP: EQ Editor (計畫已定版未動工)
+- 讀 PLAN-EQ-EDITOR.md 直接執行. 設計/研究/分工/驗收/風險全在該檔, 勿重推導.
+- 關鍵: JS/HTML 含中文一律 Claude 手寫; Web Audio 原生 shelf 無視 Q, 用 RBJ 自算係數.
+
 ## 2026-07-17: 足音遮蔽偵測 + 偏好 A/B + PEQ 引擎 (research 選題, Ben 拍板 1+2+PEQ)
 - 選題依據: RTINGS/評測研究 — 機器指標 (FR/失真/PRTF) 是 rig 地盤; 無機器指標的知覺量
   (解析力/偏好) 是本儀器地盤; 「足音頻段」查證為行銷語, 無人有數據 = 空白賽道.
