@@ -1,12 +1,12 @@
-"""SQLite persistence. Per-trial commit so a crash loses at most the current trial."""
+"""SQLite persistence with per-trial commits."""
 import json
 import os
 import sqlite3
 from contextlib import contextmanager
 
-# LOCTEST_DB env var overrides the DB file -- acceptance tests point this at a temp path
-# so they never touch the real dataset.
-DB_PATH = os.environ.get("LOCTEST_DB") or os.path.join(os.path.dirname(__file__), "localization.db")
+DB_PATH = os.environ.get("LOCTEST_DB") or os.path.join(
+    os.path.dirname(__file__), "localization.db"
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -72,12 +72,32 @@ CREATE TABLE IF NOT EXISTS width_trials (
     response_ms INTEGER,
     UNIQUE(session_id, trial_index)
 );
+CREATE TABLE IF NOT EXISTS masked_trials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id),
+    trial_index INTEGER NOT NULL,
+    level_db REAL NOT NULL,
+    target_first INTEGER NOT NULL,
+    response_first INTEGER,
+    correct INTEGER,
+    response_ms INTEGER,
+    UNIQUE(session_id, trial_index)
+);
+CREATE TABLE IF NOT EXISTS pref_trials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id),
+    trial_index INTEGER NOT NULL,
+    a_first INTEGER NOT NULL,
+    chose_a INTEGER,
+    response_ms INTEGER,
+    UNIQUE(session_id, trial_index)
+);
 """
 
 
 @contextmanager
 def connect():
-    """Connection that commits on success and always closes."""
+    """Yield a connection that commits on success and always closes."""
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
@@ -93,13 +113,17 @@ def init():
         connection.executescript(SCHEMA)
 
 
-def create_session(participant, condition, device_name, mode, config, created_at):
+def create_session(participant, condition, device_name, mode, config,
+                   created_at):
     with connect() as connection:
         cursor = connection.execute(
             "INSERT INTO sessions "
-            "(participant, condition, device_name, mode, created_at, config_json) "
-            "VALUES (?,?,?,?,?,?)",
-            (participant, condition, device_name, mode, created_at, json.dumps(config)),
+            "(participant, condition, device_name, mode, created_at, "
+            "config_json) VALUES (?,?,?,?,?,?)",
+            (
+                participant, condition, device_name, mode, created_at,
+                json.dumps(config),
+            ),
         )
         return cursor.lastrowid
 
@@ -109,14 +133,21 @@ def save_trial(session_id, trial):
     with connect() as connection:
         connection.execute(
             "INSERT OR REPLACE INTO trials "
-            "(session_id, trial_index, target_az, response_az, signed_error, abs_error, "
-            " front_back_confusion, left_right_confusion, replay_count, response_ms) "
+            "(session_id, trial_index, target_az, response_az, "
+            "signed_error, abs_error, front_back_confusion, "
+            "left_right_confusion, replay_count, response_ms) "
             "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
-                session_id, trial["trial_index"], trial["target_az"], trial["response_az"],
-                trial["signed_error"], trial["abs_error"],
-                int(trial["front_back_confusion"]), int(trial["left_right_confusion"]),
-                trial["replay_count"], trial["response_ms"],
+                session_id,
+                trial["trial_index"],
+                trial["target_az"],
+                trial["response_az"],
+                trial["signed_error"],
+                trial["abs_error"],
+                int(trial["front_back_confusion"]),
+                int(trial["left_right_confusion"]),
+                trial["replay_count"],
+                trial["response_ms"],
             ),
         )
 
@@ -126,11 +157,16 @@ def save_cmaa_trial(session_id, trial):
     with connect() as connection:
         connection.execute(
             "INSERT OR REPLACE INTO cmaa_trials "
-            "(session_id, trial_index, delta, high_side, response_side, correct, response_ms) "
-            "VALUES (?,?,?,?,?,?,?)",
+            "(session_id, trial_index, delta, high_side, response_side, "
+            "correct, response_ms) VALUES (?,?,?,?,?,?,?)",
             (
-                session_id, trial["trial_index"], trial["delta"], trial["high_side"],
-                trial["response_side"], trial["correct"], trial["response_ms"],
+                session_id,
+                trial["trial_index"],
+                trial["delta"],
+                trial["high_side"],
+                trial["response_side"],
+                trial["correct"],
+                trial["response_ms"],
             ),
         )
 
@@ -140,11 +176,15 @@ def save_abx_trial(session_id, trial):
     with connect() as connection:
         connection.execute(
             "INSERT OR REPLACE INTO abx_trials "
-            "(session_id, trial_index, x_is_a, response_is_a, correct, response_ms) "
-            "VALUES (?,?,?,?,?,?)",
+            "(session_id, trial_index, x_is_a, response_is_a, correct, "
+            "response_ms) VALUES (?,?,?,?,?,?)",
             (
-                session_id, trial["trial_index"], trial["x_is_a"],
-                trial["response_is_a"], trial["correct"], trial["response_ms"],
+                session_id,
+                trial["trial_index"],
+                trial["x_is_a"],
+                trial["response_is_a"],
+                trial["correct"],
+                trial["response_ms"],
             ),
         )
 
@@ -157,8 +197,11 @@ def save_ext_trial(session_id, trial):
             "(session_id, trial_index, target_az, rating, response_ms) "
             "VALUES (?,?,?,?,?)",
             (
-                session_id, trial["trial_index"], trial["target_az"],
-                trial["rating"], trial["response_ms"],
+                session_id,
+                trial["trial_index"],
+                trial["target_az"],
+                trial["rating"],
+                trial["response_ms"],
             ),
         )
 
@@ -171,8 +214,48 @@ def save_width_trial(session_id, trial):
             "(session_id, trial_index, a_first, chose_a, response_ms) "
             "VALUES (?,?,?,?,?)",
             (
-                session_id, trial["trial_index"], trial["a_first"],
-                trial["chose_a"], trial["response_ms"],
+                session_id,
+                trial["trial_index"],
+                trial["a_first"],
+                trial["chose_a"],
+                trial["response_ms"],
+            ),
+        )
+
+
+def save_masked_trial(session_id, trial):
+    """Insert or replace one masked-detection trial."""
+    with connect() as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO masked_trials "
+            "(session_id, trial_index, level_db, target_first, "
+            "response_first, correct, response_ms) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (
+                session_id,
+                trial["trial_index"],
+                trial["level_db"],
+                trial["target_first"],
+                trial["response_first"],
+                trial["correct"],
+                trial["response_ms"],
+            ),
+        )
+
+
+def save_pref_trial(session_id, trial):
+    """Insert or replace one preference A/B trial."""
+    with connect() as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO pref_trials "
+            "(session_id, trial_index, a_first, chose_a, response_ms) "
+            "VALUES (?,?,?,?,?)",
+            (
+                session_id,
+                trial["trial_index"],
+                trial["a_first"],
+                trial["chose_a"],
+                trial["response_ms"],
             ),
         )
 
@@ -180,14 +263,16 @@ def save_width_trial(session_id, trial):
 def mark_completed(session_id):
     with connect() as connection:
         connection.execute(
-            "UPDATE sessions SET completed = 1 WHERE id = ?", (session_id,)
+            "UPDATE sessions SET completed = 1 WHERE id = ?",
+            (session_id,),
         )
 
 
 def get_session(session_id):
     with connect() as connection:
         row = connection.execute(
-            "SELECT * FROM sessions WHERE id = ?", (session_id,)
+            "SELECT * FROM sessions WHERE id = ?",
+            (session_id,),
         ).fetchone()
         return dict(row) if row else None
 
@@ -195,8 +280,10 @@ def get_session(session_id):
 def get_trials(session_id):
     with connect() as connection:
         rows = connection.execute(
-            "SELECT * FROM trials WHERE session_id = ? AND response_az IS NOT NULL "
-            "ORDER BY trial_index", (session_id,)
+            "SELECT * FROM trials "
+            "WHERE session_id = ? AND response_az IS NOT NULL "
+            "ORDER BY trial_index",
+            (session_id,),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -206,7 +293,8 @@ def get_cmaa_trials(session_id):
         rows = connection.execute(
             "SELECT * FROM cmaa_trials "
             "WHERE session_id = ? AND response_side IS NOT NULL "
-            "ORDER BY trial_index", (session_id,)
+            "ORDER BY trial_index",
+            (session_id,),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -216,7 +304,8 @@ def get_abx_trials(session_id):
         rows = connection.execute(
             "SELECT * FROM abx_trials "
             "WHERE session_id = ? AND response_is_a IS NOT NULL "
-            "ORDER BY trial_index", (session_id,)
+            "ORDER BY trial_index",
+            (session_id,),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -226,7 +315,8 @@ def get_ext_trials(session_id):
         rows = connection.execute(
             "SELECT * FROM ext_trials "
             "WHERE session_id = ? AND rating IS NOT NULL "
-            "ORDER BY trial_index", (session_id,)
+            "ORDER BY trial_index",
+            (session_id,),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -236,13 +326,36 @@ def get_width_trials(session_id):
         rows = connection.execute(
             "SELECT * FROM width_trials "
             "WHERE session_id = ? AND chose_a IS NOT NULL "
-            "ORDER BY trial_index", (session_id,)
+            "ORDER BY trial_index",
+            (session_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_masked_trials(session_id):
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT * FROM masked_trials "
+            "WHERE session_id = ? AND response_first IS NOT NULL "
+            "ORDER BY trial_index",
+            (session_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_pref_trials(session_id):
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT * FROM pref_trials "
+            "WHERE session_id = ? AND chose_a IS NOT NULL "
+            "ORDER BY trial_index",
+            (session_id,),
         ).fetchall()
         return [dict(row) for row in rows]
 
 
 def completed_trial_indices(session_id):
-    """Return localization trial indexes that already have a response."""
+    """Return answered localization trial indexes."""
     with connect() as connection:
         rows = connection.execute(
             "SELECT trial_index FROM trials "
@@ -257,15 +370,26 @@ def list_sessions():
         rows = connection.execute(
             "SELECT s.*, "
             "((SELECT COUNT(*) FROM trials t "
-            "  WHERE t.session_id = s.id AND t.response_az IS NOT NULL) + "
+            "  WHERE t.session_id = s.id "
+            "  AND t.response_az IS NOT NULL) + "
             " (SELECT COUNT(*) FROM cmaa_trials c "
-            "  WHERE c.session_id = s.id AND c.response_side IS NOT NULL) + "
+            "  WHERE c.session_id = s.id "
+            "  AND c.response_side IS NOT NULL) + "
             " (SELECT COUNT(*) FROM abx_trials a "
-            "  WHERE a.session_id = s.id AND a.response_is_a IS NOT NULL) + "
+            "  WHERE a.session_id = s.id "
+            "  AND a.response_is_a IS NOT NULL) + "
             " (SELECT COUNT(*) FROM ext_trials e "
-            "  WHERE e.session_id = s.id AND e.rating IS NOT NULL) + "
+            "  WHERE e.session_id = s.id "
+            "  AND e.rating IS NOT NULL) + "
             " (SELECT COUNT(*) FROM width_trials w "
-            "  WHERE w.session_id = s.id AND w.chose_a IS NOT NULL)) AS n_trials "
+            "  WHERE w.session_id = s.id "
+            "  AND w.chose_a IS NOT NULL) + "
+            " (SELECT COUNT(*) FROM masked_trials m "
+            "  WHERE m.session_id = s.id "
+            "  AND m.response_first IS NOT NULL) + "
+            " (SELECT COUNT(*) FROM pref_trials p "
+            "  WHERE p.session_id = s.id "
+            "  AND p.chose_a IS NOT NULL)) AS n_trials "
             "FROM sessions s ORDER BY s.created_at DESC"
         ).fetchall()
         return [dict(row) for row in rows]
@@ -274,7 +398,9 @@ def list_sessions():
 if __name__ == "__main__":
     import tempfile
 
-    DB_PATH = os.path.join(tempfile.gettempdir(), "loctest_selfcheck.db")
+    DB_PATH = os.path.join(
+        tempfile.gettempdir(), "loctest_selfcheck.db"
+    )
     if os.path.exists(DB_PATH):
         os.remove(DB_PATH)
     init()
@@ -306,8 +432,13 @@ if __name__ == "__main__":
 
     cmaa_sid = create_session(
         "P2", "ROG_APO", "Speakers 7.1", "cmaa",
-        {"seed": 7, "output_mode": "folddown", "peak_dbfs": -12,
-         "ref_az": 0, "test_type": "cmaa"},
+        {
+            "seed": 7,
+            "output_mode": "folddown",
+            "peak_dbfs": -12,
+            "ref_az": 0,
+            "test_type": "cmaa",
+        },
         "2026-07-12T11:00:00",
     )
     cmaa_trial = {
@@ -378,13 +509,44 @@ if __name__ == "__main__":
     assert len(saved) == 1
     assert saved[0]["chose_a"] == 1
 
+    masked_trial = {
+        "trial_index": 0,
+        "level_db": -32.0,
+        "target_first": 1,
+        "response_first": 1,
+        "correct": 1,
+        "response_ms": 1000,
+    }
+    save_masked_trial(new_sid, masked_trial)
+    assert len(get_masked_trials(new_sid)) == 1
+    masked_trial["response_first"] = 0
+    masked_trial["correct"] = 0
+    save_masked_trial(new_sid, masked_trial)
+    saved = get_masked_trials(new_sid)
+    assert len(saved) == 1
+    assert saved[0]["response_first"] == 0
+
+    pref_trial = {
+        "trial_index": 0,
+        "a_first": 0,
+        "chose_a": 1,
+        "response_ms": 875,
+    }
+    save_pref_trial(new_sid, pref_trial)
+    assert len(get_pref_trials(new_sid)) == 1
+    pref_trial["chose_a"] = 0
+    save_pref_trial(new_sid, pref_trial)
+    saved = get_pref_trials(new_sid)
+    assert len(saved) == 1
+    assert saved[0]["chose_a"] == 0
+
     sessions = list_sessions()
-    assert sessions[0]["n_trials"] == 3
+    assert sessions[0]["n_trials"] == 5
     assert sessions[1]["n_trials"] == 1
+    assert sessions[2]["n_trials"] == 1
 
     mark_completed(sid)
     assert get_session(sid)["completed"] == 1
-    assert sessions[2]["n_trials"] == 1
 
     os.remove(DB_PATH)
     print("db.py selfcheck OK")

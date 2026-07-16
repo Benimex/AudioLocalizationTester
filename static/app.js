@@ -233,6 +233,46 @@ async function initSetup() {
   $("cmaa-a-stim").value = "band-low";
   $("cmaa-b-stim").value = "band-high";
 
+  // Preference spec stimulus selects (same list as abx).
+  fillS($("pref-a-stim"));
+  fillS($("pref-b-stim"));
+
+  // Masked detection: target = wavs only, masker = full list.
+  const wavs = stims.filter(s => s.toLowerCase().endsWith(".wav"));
+  const fillWavsOnly = (sel) => {
+    sel.innerHTML = "";
+    if (!wavs.length) {
+      const o = document.createElement("option");
+      o.value = ""; o.textContent = "先放 WAV 進 stimuli/"; o.disabled = true;
+      sel.appendChild(o);
+      return;
+    }
+    wavs.forEach(s => {
+      const o = document.createElement("option");
+      o.value = s; o.textContent = s;
+      sel.appendChild(o);
+    });
+  };
+  fillWavsOnly($("masked-target"));
+  fillS($("masked-masker"));
+  $("masked-masker").value = "pink";
+
+  // EQ profile selects (eq/ folder).
+  let eqs = [];
+  try { eqs = await (await fetch("/api/eqs")).json(); } catch (e) {}
+  const fillEq = (sel) => {
+    sel.innerHTML = "";
+    const none = document.createElement("option");
+    none.value = ""; none.textContent = "無 EQ";
+    sel.appendChild(none);
+    eqs.forEach(name => {
+      const o = document.createElement("option");
+      o.value = name; o.textContent = name;
+      sel.appendChild(o);
+    });
+  };
+  ["abx-a-eq", "abx-b-eq", "pref-a-eq", "pref-b-eq"].forEach(id => fillEq($(id)));
+
   $("stimulus").onchange = () => setupTrim.load($("stimulus").value);
   $("probe-stimulus").onchange = () => probeTrim.load($("probe-stimulus").value);
   setupTrim.load($("stimulus").value);
@@ -305,6 +345,8 @@ $("start-cmaa").onclick = startCmaa;
 $("start-abx").onclick = startAbx;
 $("start-ext").onclick = startExt;
 $("start-width").onclick = startWidth;
+$("start-masked").onclick = startMasked;
+$("start-pref").onclick = startPref;
 
 async function startSession(mode) {
   const devSel = $("device").selectedOptions[0];
@@ -677,6 +719,7 @@ async function startAbx() {
     az: +$(`abx-${prefix}-az`).value,
     peak_dbfs: +$("peak").value,
     region: null,
+    eq: $(`abx-${prefix}-eq`).value || null,
   });
   try {
     const data = await postJson("/api/abx/session", {
@@ -684,6 +727,7 @@ async function startAbx() {
       spec_a: spec("a"),
       spec_b: spec("b"),
       n_trials: +$("abx-n").value,
+      loudness_match: $("abx-loudmatch").checked,
     });
     abxSession = {
       id: data.session_id,
@@ -1104,6 +1148,306 @@ function showWidthDone(result) {
 }
 
 $("width-to-report").onclick = () => {
+  showView("report");
+  loadSessions();
+};
+
+// ---- masked detection flow (two-interval, QUEST on target level) ----
+let maskedSession = null;
+let maskedState = null;
+let maskedTimerStart = 0;
+let maskedReplayed = 0;
+let maskedBusy = false;
+
+function setMaskedControls(enabled) {
+  $("masked-first").disabled = !enabled;
+  $("masked-second").disabled = !enabled;
+  $("masked-replay").disabled = !enabled || maskedReplayed >= 1;
+}
+
+async function startMasked() {
+  const identity = setupIdentity();
+  if (!identity) return;
+  if (!$("masked-target").value) { alert("先放一個 WAV 進 stimuli/ 當目標音"); return; }
+  try {
+    const data = await postJson("/api/masked/session", {
+      ...identity,
+      output_mode: $("outmode").value,
+      masker_stim: $("masked-masker").value,
+      masker_dbfs: +$("masked-masker-db").value,
+      target_stim: $("masked-target").value,
+      masker_az: +$("masked-masker-az").value,
+      target_az: +$("masked-target-az").value,
+    });
+    maskedSession = { id: data.session_id, config: data.config, deviceIndex: identity.device_index };
+    showView("masked");
+    $("masked-done").classList.add("hidden");
+    await loadMaskedState();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+async function loadMaskedState() {
+  if (!maskedSession) return;
+  maskedBusy = true;
+  setMaskedControls(false);
+  $("masked-status").textContent = "Loading…";
+  try {
+    const state = await apiJson(`/api/masked/state/${maskedSession.id}`);
+    if (state.done) { showMaskedDone(state); return; }
+    await beginMaskedTrial(state);
+  } catch (error) {
+    maskedBusy = false;
+    $("masked-status").textContent = error.message;
+  }
+}
+
+async function playMaskedPair() {
+  $("masked-status").textContent = "Playing 第一段…";
+  await postJson("/api/masked/play", {
+    session_id: maskedSession.id,
+    trial_index: maskedState.trial_index,
+    level_db: maskedState.level_db,
+    interval: 1,
+    device_index: maskedSession.deviceIndex,
+  });
+  await sleep(500);
+  $("masked-status").textContent = "第二段…";
+  await postJson("/api/masked/play", {
+    session_id: maskedSession.id,
+    trial_index: maskedState.trial_index,
+    level_db: maskedState.level_db,
+    interval: 2,
+    device_index: maskedSession.deviceIndex,
+  });
+}
+
+async function beginMaskedTrial(state) {
+  maskedState = state;
+  maskedReplayed = 0;
+  maskedBusy = true;
+  setMaskedControls(false);
+  $("masked-progress").textContent = `Trial ${state.trial_index + 1} (最多 ${state.n_max}, 自適應)`;
+  try {
+    await playMaskedPair();
+    maskedTimerStart = performance.now();
+    maskedBusy = false;
+    setMaskedControls(true);
+    $("masked-status").textContent = "哪一段裡面有目標音?";
+  } catch (error) {
+    maskedBusy = false;
+    $("masked-status").textContent = error.message;
+  }
+}
+
+$("masked-replay").onclick = async () => {
+  if (!maskedSession || !maskedState || maskedState.done || maskedBusy || maskedReplayed >= 1) return;
+  maskedBusy = true;
+  maskedReplayed = 1;
+  setMaskedControls(false);
+  try {
+    await playMaskedPair();
+    maskedTimerStart = performance.now();
+    maskedBusy = false;
+    $("masked-first").disabled = false;
+    $("masked-second").disabled = false;
+    $("masked-replay").disabled = true;
+    $("masked-status").textContent = "哪一段裡面有目標音?";
+  } catch (error) {
+    maskedBusy = false;
+    $("masked-status").textContent = error.message;
+  }
+};
+
+async function answerMasked(responseFirst) {
+  if (!maskedSession || !maskedState || maskedState.done || maskedBusy) return;
+  maskedBusy = true;
+  setMaskedControls(false);
+  $("masked-status").textContent = "Saving…";
+  try {
+    const result = await postJson("/api/masked/trial", {
+      session_id: maskedSession.id,
+      trial_index: maskedState.trial_index,
+      level_db: maskedState.level_db,
+      response_first: responseFirst,
+      response_ms: Math.round(performance.now() - maskedTimerStart),
+    });
+    if (result.done) { showMaskedDone(result); return; }
+    await beginMaskedTrial(result);
+  } catch (error) {
+    maskedBusy = false;
+    $("masked-status").textContent = error.message;
+  }
+}
+
+$("masked-first").onclick = () => answerMasked(1);
+$("masked-second").onclick = () => answerMasked(0);
+
+function showMaskedDone(result) {
+  maskedState = result;
+  maskedBusy = false;
+  setMaskedControls(false);
+  $("masked-progress").textContent = `${result.n} trials complete`;
+  $("masked-status").textContent = "";
+  const e = result.estimate;
+  $("masked-result").textContent =
+    `偵測閾值 ${e.threshold.toFixed(1)} dBFS (CI ${e.ci_lo.toFixed(1)}..${e.ci_hi.toFixed(1)}) · n=${result.n} · 越低代表細節解析越好`;
+  $("masked-done").classList.remove("hidden");
+}
+
+$("masked-to-report").onclick = () => {
+  showView("report");
+  loadSessions();
+};
+
+// ---- preference flow (two-interval 2AFC, which sounds better) ----
+let prefSession = null;
+let prefState = null;
+let prefTimerStart = 0;
+let prefReplayed = 0;
+let prefBusy = false;
+
+function setPrefControls(enabled) {
+  $("pref-first").disabled = !enabled;
+  $("pref-second").disabled = !enabled;
+  $("pref-replay").disabled = !enabled || prefReplayed >= 1;
+}
+
+async function startPref() {
+  const identity = setupIdentity();
+  if (!identity) return;
+  const spec = (prefix) => ({
+    stimulus: $(`pref-${prefix}-stim`).value,
+    output_mode: $(`pref-${prefix}-mode`).value,
+    az: +$(`pref-${prefix}-az`).value,
+    peak_dbfs: +$("peak").value,
+    region: null,
+    eq: $(`pref-${prefix}-eq`).value || null,
+  });
+  try {
+    const data = await postJson("/api/pref/session", {
+      ...identity,
+      spec_a: spec("a"),
+      spec_b: spec("b"),
+      n_trials: +$("pref-n").value,
+      loudness_match: $("pref-loudmatch").checked,
+    });
+    prefSession = { id: data.session_id, config: data.config, deviceIndex: identity.device_index };
+    showView("pref");
+    $("pref-done").classList.add("hidden");
+    await loadPrefState();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+async function loadPrefState() {
+  if (!prefSession) return;
+  prefBusy = true;
+  setPrefControls(false);
+  $("pref-status").textContent = "Loading…";
+  try {
+    const state = await apiJson(`/api/pref/state/${prefSession.id}`);
+    if (state.done) { showPrefDone(state); return; }
+    await beginPrefTrial(state);
+  } catch (error) {
+    prefBusy = false;
+    $("pref-status").textContent = error.message;
+  }
+}
+
+async function playPrefPair() {
+  $("pref-status").textContent = "Playing 第一段…";
+  await postJson("/api/pref/play", {
+    session_id: prefSession.id,
+    trial_index: prefState.trial_index,
+    interval: 1,
+    device_index: prefSession.deviceIndex,
+  });
+  await sleep(600);
+  $("pref-status").textContent = "第二段…";
+  await postJson("/api/pref/play", {
+    session_id: prefSession.id,
+    trial_index: prefState.trial_index,
+    interval: 2,
+    device_index: prefSession.deviceIndex,
+  });
+}
+
+async function beginPrefTrial(state) {
+  prefState = state;
+  prefReplayed = 0;
+  prefBusy = true;
+  setPrefControls(false);
+  $("pref-progress").textContent = `Trial ${state.trial_index + 1} of ${state.n_trials}`;
+  try {
+    await playPrefPair();
+    prefTimerStart = performance.now();
+    prefBusy = false;
+    setPrefControls(true);
+    $("pref-status").textContent = "哪一段聽起來比較好?";
+  } catch (error) {
+    prefBusy = false;
+    $("pref-status").textContent = error.message;
+  }
+}
+
+$("pref-replay").onclick = async () => {
+  if (!prefSession || !prefState || prefState.done || prefBusy || prefReplayed >= 1) return;
+  prefBusy = true;
+  prefReplayed = 1;
+  setPrefControls(false);
+  try {
+    await playPrefPair();
+    prefTimerStart = performance.now();
+    prefBusy = false;
+    $("pref-first").disabled = false;
+    $("pref-second").disabled = false;
+    $("pref-replay").disabled = true;
+    $("pref-status").textContent = "哪一段聽起來比較好?";
+  } catch (error) {
+    prefBusy = false;
+    $("pref-status").textContent = error.message;
+  }
+};
+
+async function answerPref(choseFirst) {
+  if (!prefSession || !prefState || prefState.done || prefBusy) return;
+  prefBusy = true;
+  setPrefControls(false);
+  $("pref-status").textContent = "Saving…";
+  try {
+    const result = await postJson("/api/pref/trial", {
+      session_id: prefSession.id,
+      trial_index: prefState.trial_index,
+      chose_first: choseFirst,
+      response_ms: Math.round(performance.now() - prefTimerStart),
+    });
+    if (result.done) { showPrefDone(result); return; }
+    await beginPrefTrial(result);
+  } catch (error) {
+    prefBusy = false;
+    $("pref-status").textContent = error.message;
+  }
+}
+
+$("pref-first").onclick = () => answerPref(1);
+$("pref-second").onclick = () => answerPref(0);
+
+function showPrefDone(result) {
+  prefState = result;
+  prefBusy = false;
+  setPrefControls(false);
+  $("pref-progress").textContent = `${result.n} trials complete`;
+  $("pref-status").textContent = "";
+  const verdict = result.p_value < 0.05 ? "偏好顯著" : "無顯著偏好";
+  $("pref-result").textContent =
+    `A 被選 ${result.k_a}/${result.n} · p=${result.p_value.toFixed(4)} · ${verdict}`;
+  $("pref-done").classList.remove("hidden");
+}
+
+$("pref-to-report").onclick = () => {
   showView("report");
   loadSessions();
 };

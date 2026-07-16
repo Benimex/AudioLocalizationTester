@@ -78,3 +78,5 @@ table.mini td:nth-child(3) { max-width: 420px; }
 #source-list li span { font-size: 13px; }
 .sq { display:inline-block; width:14px; height:14px; margin:2px; border-radius:3px; }
 .ext-btn { min-width:96px; }
+.inline-check { font-weight: 600; }
+.inline-check input { display: inline-block; width: auto; margin-right: 6px; vertical-align: middle; }

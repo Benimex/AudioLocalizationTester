@@ -376,6 +376,98 @@ function renderWidthReport(container, data) {
     "綠色 = 選擇 A，灰色 = 選擇 B；無對錯，顏色只標選擇."));
 }
 
+// Masked-detection staircase: linear dB axis, points at each trial's target level.
+function maskedStaircase(data) {
+  const W = 720, H = 320;
+  const left = 56, right = 18, top = 14, bottom = 38;
+  const plotW = W - left - right, plotH = H - top - bottom;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H });
+  const trials = data.trials, estimate = data.estimate;
+  const DB_LO = -60, DB_HI = -6;
+  const y = (db) => top + (DB_HI - Math.max(DB_LO, Math.min(DB_HI, db))) / (DB_HI - DB_LO) * plotH;
+  const x = (i) => left + (trials.length <= 1 ? plotW / 2 : i / (trials.length - 1) * plotW);
+
+  svg.appendChild(el("rect", { x: left, y: top, width: plotW, height: plotH, fill: "#fff", stroke: "#ccc" }));
+  for (let db = DB_LO; db <= DB_HI; db += 6) {
+    const ty = y(db);
+    svg.appendChild(el("line", { x1: left, y1: ty, x2: left + plotW, y2: ty, stroke: "#ececec" }));
+    svg.appendChild(el("text", { x: left - 7, y: ty + 4, "text-anchor": "end" }, String(db)));
+  }
+  for (let t = 0; t < trials.length; t += 5) {
+    const tx = x(t);
+    svg.appendChild(el("line", { x1: tx, y1: top + plotH, x2: tx, y2: top + plotH + 5, stroke: "#777" }));
+    svg.appendChild(el("text", { x: tx, y: top + plotH + 18, "text-anchor": "middle" }, String(t)));
+  }
+  if (estimate) {
+    const bandTop = y(estimate.ci_hi), bandBottom = y(estimate.ci_lo);
+    svg.appendChild(el("rect", { x: left, y: bandTop, width: plotW,
+      height: Math.max(0, bandBottom - bandTop), fill: "rgba(43,108,255,.14)" }));
+    const ty = y(estimate.threshold);
+    svg.appendChild(el("line", { x1: left, y1: ty, x2: left + plotW, y2: ty,
+      stroke: "#2b6cff", "stroke-width": 2, "stroke-dasharray": "7 5" }));
+  }
+  for (const t of trials) {
+    svg.appendChild(el("circle", { cx: x(t.trial_index), cy: y(t.level_db), r: 4,
+      fill: t.correct ? "#24934d" : "#d33b3b", stroke: "#fff", "stroke-width": 1 }));
+  }
+  svg.appendChild(el("text", { x: left + plotW / 2, y: H - 5, "text-anchor": "middle",
+    "font-weight": "700" }, "Trial index"));
+  svg.appendChild(el("text", { x: 14, y: top + plotH / 2, "text-anchor": "middle",
+    transform: `rotate(-90 14 ${top + plotH / 2})`, "font-weight": "700" }, "Target level (dBFS)"));
+  return svg;
+}
+
+function renderMaskedReport(container, data) {
+  container.innerHTML = "";
+  const s = data.session;
+  if (!data.n || !data.estimate) {
+    container.textContent = "No committed trials.";
+    return;
+  }
+  const config = reportConfig(s);
+  const e = data.estimate;
+  const summary = document.createElement("div");
+  summary.className = "metric-block";
+  summary.innerHTML = `<h3>Session #${s.id} — ${s.participant} / ${s.condition}</h3>
+    <p><span class="big-num">${e.threshold.toFixed(1)} dBFS</span> 偵測閾值</p>
+    <p>CI ${e.ci_lo.toFixed(1)}..${e.ci_hi.toFixed(1)} dBFS · n=${data.n}</p>
+    <p>目標: ${config.target_stim ?? "n/a"} · 遮蔽: ${config.masker_stim ?? "n/a"} @ ${config.masker_dbfs ?? "n/a"} dBFS</p>
+    <p class="hint">在固定遮蔽音下, 能聽出目標音的最低音量. 閾值越低代表細節解析越好.
+      不同遮蔽設定的閾值不可直接互比.</p>
+    <p><a href="/api/export/${s.id}">下載 CSV (原始逐題資料)</a></p>`;
+  container.appendChild(summary);
+  container.appendChild(metricBlock("QUEST staircase", maskedStaircase(data),
+    "每點是一題, 高度是當題目標音量, 綠=答對紅=答錯; 線=收斂出的偵測閾值."));
+}
+
+function renderPrefReport(container, data) {
+  container.innerHTML = "";
+  const s = data.session;
+  if (!data.n) {
+    container.textContent = "No committed trials.";
+    return;
+  }
+  const config = reportConfig(s);
+  const specA = config.spec_a || {}, specB = config.spec_b || {};
+  const p = data.p_value;
+  const verdict = p != null && p < 0.05 ? "偏好顯著" : "無顯著偏好";
+  const specText = spec =>
+    `${spec.stimulus ?? "n/a"} / ${spec.output_mode ?? "n/a"} / EQ: ${spec.eq ?? "無"}`;
+  const summary = document.createElement("div");
+  summary.className = "metric-block";
+  summary.innerHTML = `<h3>Session #${s.id} — ${s.participant} / ${s.condition}</h3>
+    <p><span class="big-num">${data.k_a}/${data.n}</span> 選擇 A</p>
+    <p>p = ${formatP(p)} (two-sided)</p>
+    <p><b>${verdict}</b></p>
+    <p class="hint">A: ${specText(specA)}<br>B: ${specText(specB)}</p>
+    <p class="hint">響度匹配: ${config.level_mode === "rms" ? "開 (RMS)" : "關"}. 主觀偏好, 與客觀指標分開解讀.</p>
+    <p><a href="/api/export/${s.id}">下載 CSV (原始逐題資料)</a></p>`;
+  container.appendChild(summary);
+  container.appendChild(metricBlock("逐題結果",
+    trialSquares(data.trials, trial => trial.chose_a ? "#24934d" : "#999"),
+    "綠色 = 選擇 A，灰色 = 選擇 B；無對錯，顏色只標選擇."));
+}
+
 function pct(x) { return x == null ? "n/a" : (x * 100).toFixed(1) + "%"; }
 
 function renderCompare(container, cols) {
@@ -387,6 +479,8 @@ function renderCompare(container, cols) {
   const abxCols = cols.filter(c => c.metrics.type === "abx");
   const extCols = cols.filter(c => c.metrics.type === "extern");
   const widthCols = cols.filter(c => c.metrics.type === "width");
+  const maskedCols = cols.filter(c => c.metrics.type === "masked");
+  const prefCols = cols.filter(c => c.metrics.type === "pref");
   let html = "";
 
   if (locCols.length) {
@@ -482,6 +576,43 @@ function renderCompare(container, cols) {
     html += "</table></div>";
   }
 
+  if (maskedCols.length) {
+    const rows = [
+      ["n", c => c.metrics.n],
+      ["偵測閾值 (dBFS)", c => c.metrics.threshold == null ? "n/a" : c.metrics.threshold.toFixed(1)],
+      ["CI", c => c.metrics.ci_lo == null || c.metrics.ci_hi == null
+        ? "n/a" : `${c.metrics.ci_lo.toFixed(1)}..${c.metrics.ci_hi.toFixed(1)}`],
+    ];
+    html += "<div class='metric-block'><h3>Masked Detection (足音偵測)</h3>" +
+      "<p class='hint'>閾值越低代表在遮蔽下越能聽出細節; 只有相同遮蔽設定的欄位可互比.</p><table><tr><th>Metric</th>";
+    maskedCols.forEach(c => html += `<th>${c.label}</th>`);
+    html += "</tr>";
+    rows.forEach(([name, fn]) => {
+      html += `<tr><td>${name}</td>`;
+      maskedCols.forEach(c => html += `<td>${fn(c)}</td>`);
+      html += "</tr>";
+    });
+    html += "</table></div>";
+  }
+
+  if (prefCols.length) {
+    const rows = [
+      ["n", c => c.metrics.n],
+      ["A被選比例", c => c.metrics.n ? pct(c.metrics.k_a / c.metrics.n) : "n/a"],
+      ["p 值", c => formatP(c.metrics.p_value)],
+    ];
+    html += "<div class='metric-block'><h3>Preference (偏好)</h3>" +
+      "<p class='hint'>主觀偏好 2AFC; p 值判斷偏好是否顯著.</p><table><tr><th>Metric</th>";
+    prefCols.forEach(c => html += `<th>${c.label}</th>`);
+    html += "</tr>";
+    rows.forEach(([name, fn]) => {
+      html += `<tr><td>${name}</td>`;
+      prefCols.forEach(c => html += `<td>${fn(c)}</td>`);
+      html += "</tr>";
+    });
+    html += "</table></div>";
+  }
+
   container.innerHTML = html;
 }
 
@@ -512,6 +643,8 @@ document.addEventListener("click", async (e) => {
       abx: [`/api/abx/report/${rep}`, renderAbxReport],
       extern: [`/api/ext/report/${rep}`, renderExtReport],
       width: [`/api/width/report/${rep}`, renderWidthReport],
+      masked: [`/api/masked/report/${rep}`, renderMaskedReport],
+      pref: [`/api/pref/report/${rep}`, renderPrefReport],
     };
     const [endpoint, renderer] = reports[mode] || [`/api/report/${rep}`, renderReport];
     const data = await (await fetch(endpoint)).json();

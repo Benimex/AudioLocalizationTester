@@ -1,6 +1,26 @@
 # STATUS
 
-as-of: 2026-07-16
+as-of: 2026-07-17
+
+## 2026-07-17: 足音遮蔽偵測 + 偏好 A/B + PEQ 引擎 (research 選題, Ben 拍板 1+2+PEQ)
+- 選題依據: RTINGS/評測研究 — 機器指標 (FR/失真/PRTF) 是 rig 地盤; 無機器指標的知覺量
+  (解析力/偏好) 是本儀器地盤; 「足音頻段」查證為行銷語, 無人有數據 = 空白賽道.
+- PEQ 引擎 (audio.py): eq/ 資料夾放 EQ APO/AutoEq txt (Preamp + PK/LSC/HSC), RBJ biquad
+  -> scipy sosfilt. render_spec 收 eq + level_mode (peak|rms; rms 供響度匹配, 目標
+  peak_dbfs-8, 防爆 0.98 cap). 正規化重構為單點 (pan 函式加 pre_normalized).
+- Masked detection (masked.py + routes + UI): 目標 WAV 藏在兩段其一 (2AFC interval),
+  遮蔽音固定 (預設 pink @ -18dBFS), QUEST 調目標音量 (grid -60..-6 dB, sigma 4dB,
+  停止 sd<=2dB). render_masked 絕對電平混音 (不重正規化), clip guard. 驗收: 模擬觀察者
+  真值 -32dB, 28 題收斂 -32.0 (CI -35.9..-28.1).
+- Preference A/B (routes + UI): 兩 render spec (含 EQ) 2AFC 哪個好聽, 雙尾 p.
+  ABX spec 也收 eq; 兩者 loudness_match 預設開 (level_mode=rms).
+- 報表: masked staircase (dB 軸) + pref 摘要; Compare 加兩型表; CSV export 兩型.
+- Codex 品質事故 #4/#5: batch 3 拒絕輸出完整檔 (太長); 3a 重出 index.html 把既有中文
+  全轉亂碼 (其 shell cp950 讀檔). 處置: index.html 從 HEAD 還原+新區塊手動加;
+  app.js/report.js 流程由 Claude 依既有 pattern 手寫. 教訓: Codex 不可重輸出含中文的
+  既有檔; 只讓它產全新內容或純 ASCII 檔.
+- Verified: 五模組 selfcheck; 三 JS node --check; id+編碼檢查; masked/pref API 端到端
+  (模擬觀察者); 七種 session 型 smoke; EQ 驗證 (非法檔 400, rms level_mode 進 config).
 
 ## 2026-07-16 (五): per-source 音檔 (Ben: 球標籤+音量都加, 動工)
 - Object Panner: 每球自選刺激 (列表內嵌下拉, 換選播放中即時單軌重建), 每球音量滑桿

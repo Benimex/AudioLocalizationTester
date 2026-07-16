@@ -69,6 +69,16 @@ the APO under test. Double-processing (Windows Sonic + your APO) invalidates res
 - **Soundstage width** (進階測試 → Width): 2AFC "which interval sounds wider" between two
   decorrelated-pair spreads; two-sided binomial p-value. Use pink noise (a WAV is identical
   on both sides, so perceived width is limited).
+- **Masked detection** (進階測試 → Masked): a target WAV (e.g. footstep) hides in one of two
+  intervals under a fixed masker (e.g. pink noise or gunfire); QUEST adapts the target level
+  to find the lowest detectable level in dBFS. Lower = better detail retrieval under load —
+  the "can you hear the footsteps" metric. Thresholds are only comparable across identical
+  masker settings.
+- **Preference A/B** (進階測試 → Preference): 2AFC "which sounds better" between two render
+  specs; two-sided binomial p-value. Pairs well with EQ profiles.
+- **Parametric EQ profiles**: drop Equalizer APO / AutoEq text files (Preamp + PK/LSC/HSC
+  filters) into `eq/`; select them per-spec in ABX and Preference to blind-test two tunings.
+  Loudness matching (RMS) is on by default so you compare tuning, not volume.
 
 ## Reports
 
