@@ -294,12 +294,20 @@ def create_cmaa_session():
     if output_mode not in OUTPUT_MODES:
         return jsonify({"error": f"Unknown output mode '{output_mode}'."}), 400
 
+    stim_a = data.get("stim_a", "band-low")
+    stim_b = data.get("stim_b", "band-high")
+    for stimulus in (stim_a, stim_b):
+        if stimulus not in {"band-low", "band-high"} and not stimulus.lower().endswith(".wav"):
+            return jsonify({"error": f"Unknown CMAA stimulus '{stimulus}'."}), 400
+
     seed = random.randrange(1, 2**31)
     config = {
         "seed": seed,
         "output_mode": output_mode,
         "peak_dbfs": float(data.get("peak_dbfs", -12.0)),
         "ref_az": float(data.get("ref_az", 0.0)),
+        "stim_a": stim_a,
+        "stim_b": stim_b,
         "test_type": "cmaa",
     }
     session_id = db.create_session(
@@ -332,6 +340,8 @@ def cmaa_play():
             float(data["peak_dbfs"]),
             data["output_mode"],
             int(data["seed"]),
+            stim_a=data.get("stim_a", "band-low"),
+            stim_b=data.get("stim_b", "band-high"),
         )
         audio.play_frame(frame, int(data["device_index"]))
     except ValueError as error:

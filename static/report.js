@@ -190,6 +190,12 @@ function cmaaStaircase(data) {
   return svg;
 }
 
+function cmaaStimulusName(kind) {
+  if (kind === "band-low") return "低沉聲";
+  if (kind === "band-high") return "清亮聲";
+  return String(kind || "").split(/[\\/]/).pop().replace(/\.wav$/i, "");
+}
+
 function renderCmaaReport(container, data) {
   container.innerHTML = "";
   const s = data.session, estimate = data.estimate;
@@ -198,12 +204,16 @@ function renderCmaaReport(container, data) {
     return;
   }
 
+  const config = reportConfig(s);
+  const nameA = cmaaStimulusName(config.stim_a || "band-low");
+  const nameB = cmaaStimulusName(config.stim_b || "band-high");
   const summary = document.createElement("div");
   summary.className = "metric-block";
   summary.innerHTML = `<h3>Session #${s.id} — ${s.participant} / ${s.condition}</h3>
     <p><span class="big-num">${estimate.threshold.toFixed(1)}°</span> separation threshold</p>
     <p>CI ${estimate.ci_lo.toFixed(1)}°–${estimate.ci_hi.toFixed(1)}° · n=${data.n}</p>
-    <p class="hint">閾值越低代表能分辨越接近的兩個聲音, 分離度越好.</p>
+    <p>音源: A=${nameA} · B=${nameB}</p>
+    <p class="hint">閾值越低代表能分辨越接近的兩個聲音, 分離度越好. 不同音源組合的閾值不可直接互比.</p>
     <p><a href="/api/export/${s.id}">下載 CSV (原始逐題資料)</a></p>`;
   container.appendChild(summary);
   container.appendChild(metricBlock("QUEST staircase", cmaaStaircase(data),

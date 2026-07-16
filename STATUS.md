@@ -2,6 +2,20 @@
 
 as-of: 2026-07-16
 
+## 2026-07-16 (五): per-source 音檔 (Ben: 球標籤+音量都加, 動工)
+- Object Panner: 每球自選刺激 (列表內嵌下拉, 換選播放中即時單軌重建), 每球音量滑桿
+  (voice gain 即時), WAV A/B 區段跟著 active 球走 (物件模型 {az,y,dh,stim,region,gain}),
+  3D 球頂名稱標籤 (跟著拖動). 全域刺激下拉移除.
+- CMAA: Source A/B 可選 (內建低頻/高頻 band noise 或任一 WAV). render_cmaa 收 stim_a/b,
+  兩 token 齊頭裁 min(兩檔長, 1 秒) 後重 ramp. 問題/回饋/報表文字動態帶音源名;
+  報表註明不同音源組合閾值不可互比.
+- 事故與復原: Codex batch B 違反輸出格式 (給片段非完整檔), 套用時五檔被覆蓋成殘片.
+  復原: 殘片備份 scratchpad -> git show 67dd555 還原四檔 + batch A index.html 從 codex
+  session jsonl 重取 -> 殘片當補丁手動合併. 零損失. 教訓: 套用前先驗塊長度
+  (完整檔應 >> 舊檔的 1/3), 已納入之後的套用檢查.
+- Verified: 四模組 selfcheck; 三 JS node --check; id 交叉檢查; API (temp DB): wav+band
+  CMAA session/render/trial/export, 非法 stim 400, 預設不變.
+
 ## 2026-07-16 (四): ABX + 頭外感 + 音場寬度 三測試 (Ben 拍板 1+2+3, 睡前交辦全自動執行)
 - Codex 四批 (核心模組 / main.py 路由 / index.html+app.js / report.js+css), Claude 套用+驗收.
 - ABX: 兩 render spec (stimulus/output_mode/az) 差異辨識, X 隨機, 無限重播, 精確二項 p 值

@@ -52,7 +52,10 @@
     <button id="start-practice">Start Practice (5 trials)</button>
     <button id="start-main" class="primary">Start Main Session</button>
     <button id="start-cmaa">Start Separation Test (CMAA)</button>
+    <label>Source A <select id="cmaa-a-stim"></select></label>
+    <label>Source B <select id="cmaa-b-stim"></select></label>
   </div>
+  <p class="hint">CMAA 兩音源音色需可區分; 選 WAV 時兩檔會齊頭裁到相同長度 (上限 1 秒).</p>
 
   <h3>進階測試</h3>
   <div id="abx-setup">
@@ -269,7 +272,6 @@
     (參考, 非產品 APO); 立體聲輸出, 不需 7.1. 左右穩, 高度與前後受通用 HRTF 限制.</p>
   <div class="row">
     <label>Output device <select id="panner-device"></select></label>
-    <label>Stimulus <select id="panner-stim"></select></label>
   </div>
   <div id="wav-player" class="hidden">
     <canvas id="wav-wave" width="560" height="72"></canvas>
@@ -290,6 +292,7 @@
         <input id="panner-y" type="range" min="-1.45" max="2.6" step="0.1" value="0"></label>
       <label>Distance (水平距離): <span id="dist-val">1.4</span> m
         <input id="panner-dist" type="range" min="0.3" max="3" step="0.1" value="1.4"></label>
+      <label>Volume (此音源): <span id="src-vol-val">0.80</span><input id="panner-src-vol" type="range" min="0" max="1" step="0.01" value="0.8"></label>
       <h3>Sources</h3>
       <ul id="source-list"></ul>
       <button id="add-source">+ Add source</button>

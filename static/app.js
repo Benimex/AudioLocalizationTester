@@ -214,6 +214,25 @@ async function initSetup() {
   fillS($("probe-stimulus"));
   fillS($("abx-a-stim"));
   fillS($("abx-b-stim"));
+
+  const fillCmaaStimuli = (sel) => {
+    sel.innerHTML = "";
+    [["band-low", "低頻噪音 (內建)"], ["band-high", "高頻噪音 (內建)"]].forEach(([value, text]) => {
+      const option = document.createElement("option");
+      option.value = value; option.textContent = text;
+      sel.appendChild(option);
+    });
+    stims.filter(s => s.toLowerCase().endsWith(".wav")).forEach(s => {
+      const option = document.createElement("option");
+      option.value = s; option.textContent = s;
+      sel.appendChild(option);
+    });
+  };
+  fillCmaaStimuli($("cmaa-a-stim"));
+  fillCmaaStimuli($("cmaa-b-stim"));
+  $("cmaa-a-stim").value = "band-low";
+  $("cmaa-b-stim").value = "band-high";
+
   $("stimulus").onchange = () => setupTrim.load($("stimulus").value);
   $("probe-stimulus").onchange = () => probeTrim.load($("probe-stimulus").value);
   setupTrim.load($("stimulus").value);
@@ -403,6 +422,12 @@ let cmaaTimerStart = 0;
 let cmaaReplayed = 0;
 let cmaaBusy = false;
 
+function cmaaStimulusName(kind) {
+  if (kind === "band-low") return "低沉聲";
+  if (kind === "band-high") return "清亮聲";
+  return kind.split(/[\\/]/).pop().replace(/\.wav$/i, "");
+}
+
 async function startCmaa() {
   const devSel = $("device").selectedOptions[0];
   if (!checkDevice($("device"), $("device-warn"), $("outmode"))) return;
@@ -416,6 +441,8 @@ async function startCmaa() {
     output_mode: $("outmode").value,
     peak_dbfs: +$("peak").value,
     ref_az: 0,
+    stim_a: $("cmaa-a-stim").value,
+    stim_b: $("cmaa-b-stim").value,
   };
   try {
     const data = await postJson("/api/cmaa/session", body);
@@ -430,6 +457,8 @@ async function startCmaa() {
     showView("cmaa");
     $("cmaa-done").classList.add("hidden");
     $("cmaa-question").classList.remove("hidden");
+    $("cmaa-question").textContent =
+      `同時會聽到兩個聲音. 「${cmaaStimulusName(cm.config.stim_b)}」在「${cmaaStimulusName(cm.config.stim_a)}」的哪一邊?`;
     $("cmaa-left").classList.remove("hidden");
     $("cmaa-right").classList.remove("hidden");
     $("cmaa-replay").classList.remove("hidden");
@@ -456,6 +485,8 @@ async function cmaaPlay(spec, seed) {
     peak_dbfs: c.peak_dbfs,
     output_mode: c.output_mode,
     seed,
+    stim_a: c.stim_a,
+    stim_b: c.stim_b,
   });
 }
 
@@ -484,7 +515,7 @@ async function beginCmaaPractice() {
     cmaaTimerStart = performance.now();
     cmaaBusy = false;
     setCmaaControls(true);
-    $("cmaa-status").textContent = "清亮的聲音在左邊還是右邊?";
+    $("cmaa-status").textContent = `${cmaaStimulusName(cm.config.stim_b)}在左邊還是右邊?`;
   } catch (error) {
     cmaaBusy = false;
     $("cmaa-status").textContent = error.message;
@@ -524,7 +555,7 @@ async function beginCmaaMain(spec) {
     cmaaTimerStart = performance.now();
     cmaaBusy = false;
     setCmaaControls(true);
-    $("cmaa-status").textContent = "清亮的聲音在左邊還是右邊?";
+    $("cmaa-status").textContent = `${cmaaStimulusName(cm.config.stim_b)}在左邊還是右邊?`;
   } catch (error) {
     cmaaBusy = false;
     $("cmaa-status").textContent = error.message;
@@ -540,7 +571,7 @@ async function answerCmaa(responseSide) {
   if (cm.phase === "practice") {
     const correct = responseSide === cmaaSpec.high_side;
     const sideText = cmaaSpec.high_side === 1 ? "右邊" : "左邊";
-    $("cmaa-feedback").textContent = `${correct ? "正確" : "錯誤"} (清亮聲在${sideText})`;
+    $("cmaa-feedback").textContent = `${correct ? "正確" : "錯誤"} (${cmaaStimulusName(cm.config.stim_b)}在${sideText})`;
     $("cmaa-feedback").classList.remove("hidden");
     $("cmaa-status").textContent = "";
     await sleep(1600);
@@ -591,7 +622,7 @@ $("cmaa-replay").onclick = async () => {
     $("cmaa-left").disabled = false;
     $("cmaa-right").disabled = false;
     $("cmaa-replay").disabled = true;
-    $("cmaa-status").textContent = "清亮的聲音在左邊還是右邊?";
+    $("cmaa-status").textContent = `${cmaaStimulusName(cm.config.stim_b)}在左邊還是右邊?`;
   } catch (error) {
     cmaaBusy = false;
     $("cmaa-status").textContent = error.message;

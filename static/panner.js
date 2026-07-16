@@ -8,10 +8,11 @@
   const FLOOR_Y = -1.6, DH_MIN = 0.3, DH_MAX = 3.0, EL_MIN = -40, EL_MAX = 90, DIST_MAX = 3.0;
   const D2R = Math.PI / 180, R2D = 180 / Math.PI;
 
-  let objects = [{ az: 0, y: 0, dh: 1.4 }];
+  let STIMS = ["pink pulse", "white pulse", "click", "pink cont", "white cont"];
+  let objects = [{ az: 0, y: 0, dh: 1.4, stim: "pink pulse", region: null, gain: 0.8 }];
   let active = 0, playing = false;
   let scene, camera, renderer, orbit, raycaster, pointer;
-  let spheres = [], dropLines = [], shadows = [];
+  let spheres = [], dropLines = [], shadows = [], labels = [];
   let dragging = null, dragPlane;
 
   const worldPos = (o) => new THREE.Vector3(o.dh * Math.sin(o.az * D2R), o.y, -o.dh * Math.cos(o.az * D2R));
@@ -19,7 +20,8 @@
 
   // ================= Web Audio (real-time HRTF) =================
   let actx = null, master = null, voices = [];   // voices[i] = {src, panner, gain}
-  let region = { a: 0, b: 0, dur: 0 }, regionBuf = null;   // WAV A/B loop region
+  let region = { a: 0, b: 0, dur: 0 }, regionBuf = null;   // active source's WAV A/B loop region
+  const stimCache = {};
 
   function fillNoise(d, isPink) {
     if (isPink) {                                // Paul Kellet pink filter
@@ -68,6 +70,12 @@
     wavCache[name] = mono; return mono;
   }
 
+  async function bufferFor(kind) {
+    if (kind.toLowerCase().endsWith(".wav")) return loadWav(kind);
+    if (!stimCache[kind]) stimCache[kind] = makeStimBuffer(kind);
+    return stimCache[kind];
+  }
+
   function positionPanner(p, o) {
     const v = worldPos(o), t = actx ? actx.currentTime : 0;
     // small ramp = zipper-free but still real-time-seamless
@@ -76,26 +84,72 @@
     p.positionZ.setTargetAtTime(v.z, t, 0.01);
   }
 
-  async function buildVoices() {
-    voices.forEach(v => { try { v.src.stop(); } catch (e) {} });
-    voices = [];
-    const kind = g("panner-stim").value;
-    const isWav = kind.toLowerCase().endsWith(".wav");
+  async function makeVoice(i, existing) {
+    const o = objects[i];
+    const isWav = o.stim.toLowerCase().endsWith(".wav");
     let buf;
-    try { buf = isWav ? await loadWav(kind) : makeStimBuffer(kind); }
-    catch (e) { buf = makeStimBuffer("white pulse"); }
-    objects.forEach(o => {
-      const src = actx.createBufferSource(); src.buffer = buf; src.loop = true;
-      if (isWav) { src.loopStart = region.a; src.loopEnd = region.b; }  // A/B region
-      const panner = actx.createPanner();
+    try { buf = await bufferFor(o.stim); }
+    catch (e) { buf = await bufferFor("white pulse"); }
+
+    const src = actx.createBufferSource(); src.buffer = buf; src.loop = true;
+    let startAt = 0;
+    if (isWav) {
+      const r = o.region || [0, buf.duration];
+      src.loopStart = r[0]; src.loopEnd = r[1]; startAt = r[0];
+    }
+
+    let panner, gain;
+    if (existing) {
+      panner = existing.panner; gain = existing.gain;
+      gain.gain.setTargetAtTime(o.gain, actx.currentTime, 0.02);
+    } else {
+      panner = actx.createPanner();
       panner.panningModel = "HRTF"; panner.distanceModel = "inverse";
       panner.refDistance = 1; panner.rolloffFactor = 1;
       positionPanner(panner, o);
-      const gain = actx.createGain(); gain.gain.value = 0.5;
-      src.connect(panner).connect(gain).connect(master);
-      src.start(0, isWav ? region.a : 0);
-      voices.push({ src, panner, gain });
+      gain = actx.createGain(); gain.gain.value = o.gain;
+      panner.connect(gain).connect(master);
+    }
+    src.connect(panner);
+    src.start(0, startAt);
+    return { src, panner, gain };
+  }
+
+  async function buildVoices() {
+    voices.forEach(v => { try { v.src.stop(); } catch (e) {} });
+    voices.forEach(v => {
+      try { v.src.disconnect(); } catch (e) {}
+      try { v.panner.disconnect(); } catch (e) {}
+      try { v.gain.disconnect(); } catch (e) {}
     });
+    voices = [];
+    const built = await Promise.all(objects.map((o, i) => makeVoice(i, null)));
+    if (!playing) {
+      built.forEach(v => {
+        try { v.src.stop(); } catch (e) {}
+        try { v.src.disconnect(); } catch (e) {}
+        try { v.panner.disconnect(); } catch (e) {}
+        try { v.gain.disconnect(); } catch (e) {}
+      });
+      return;
+    }
+    voices = built;
+  }
+
+  async function rebuildVoice(i) {
+    if (!playing || !objects[i]) return;
+    const old = voices[i];
+    if (old) {
+      try { old.src.stop(); } catch (e) {}
+      try { old.src.disconnect(); } catch (e) {}
+    }
+    const fresh = await makeVoice(i, old || null);
+    if (!playing || !objects[i]) {
+      try { fresh.src.stop(); } catch (e) {}
+      try { fresh.src.disconnect(); } catch (e) {}
+      return;
+    }
+    voices[i] = fresh;
   }
 
   async function startAudio() {
@@ -108,7 +162,15 @@
     if (dev && actx.setSinkId) { try { await actx.setSinkId(dev); } catch (e) {} }
     await buildVoices();
   }
-  function stopAudio() { voices.forEach(v => { try { v.src.stop(); } catch (e) {} }); voices = []; }
+  function stopAudio() {
+    voices.forEach(v => {
+      try { v.src.stop(); } catch (e) {}
+      try { v.src.disconnect(); } catch (e) {}
+      try { v.panner.disconnect(); } catch (e) {}
+      try { v.gain.disconnect(); } catch (e) {}
+    });
+    voices = [];
+  }
 
   // ================= three.js scene =================
   function textSprite(txt, color) {
@@ -118,6 +180,12 @@
     x.fillText(txt, 64, 32);
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true }));
     sp.scale.set(0.9, 0.45, 1); return sp;
+  }
+
+  function shortName(stim) {
+    if (!stim.toLowerCase().endsWith(".wav")) return stim;
+    const base = stim.replace(/^.*[\\/]/, "").replace(/\.wav$/i, "");
+    return base.length > 10 ? base.slice(0, 10) : base;
   }
 
   function makeHead() {
@@ -181,8 +249,8 @@
 
   const COLORS = [0x2b6cff, 0x35c07a, 0xe0c020, 0xe0603a, 0x9a5ad0];
   function rebuildSpheres() {
-    [...spheres, ...dropLines, ...shadows].forEach(o => scene.remove(o));
-    spheres = []; dropLines = []; shadows = [];
+    [...spheres, ...dropLines, ...shadows, ...labels].forEach(o => scene.remove(o));
+    spheres = []; dropLines = []; shadows = []; labels = [];
     objects.forEach((o, i) => {
       const col = COLORS[i % COLORS.length];
       const sp = new THREE.Mesh(new THREE.SphereGeometry(0.15, 20, 16), new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0.25 }));
@@ -191,6 +259,8 @@
       scene.add(line); dropLines.push(line);
       const sh = new THREE.Mesh(new THREE.CircleGeometry(0.14, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 }));
       sh.rotation.x = -Math.PI / 2; scene.add(sh); shadows.push(sh);
+      const label = textSprite(shortName(o.stim), "#ffffff");
+      label.scale.set(0.7, 0.35, 1); scene.add(label); labels.push(label);
     });
     updateDrops();
   }
@@ -200,6 +270,7 @@
       dropLines[i].geometry.setFromPoints([p.clone(), new THREE.Vector3(p.x, FLOOR_Y, p.z)]);
       dropLines[i].computeLineDistances();
       shadows[i].position.set(p.x, FLOOR_Y + 0.01, p.z);
+      labels[i].position.set(p.x, p.y + 0.30, p.z);
       const on = i === active;
       sp.scale.setScalar(on ? 1.28 : 1.0); sp.material.emissiveIntensity = on ? 0.55 : 0.2;
     });
@@ -217,7 +288,7 @@
     const hit = pick(e); if (!hit) return;
     active = hit.object.userData.idx; dragging = active;
     dragPlane.constant = -objects[active].y; orbit.enabled = false;
-    syncControls(); renderList(); updateDrops();
+    syncControls(); renderList(); updateDrops(); refreshTrim();
   }
   function onMove(e) {
     if (dragging === null) return;
@@ -243,12 +314,47 @@
     const ul = g("source-list"); ul.innerHTML = "";
     objects.forEach((o, i) => {
       const li = document.createElement("li"); li.className = i === active ? "active-src" : "";
-      li.innerHTML = `<span>#${i + 1} &nbsp; az ${o.az}° · h ${o.y}m · ${o.dh}m &nbsp;<em>(el ${Math.round(backendEl(o))}°)</em></span>`;
+      const line1 = document.createElement("div");
+      line1.innerHTML = `<span>#${i + 1} &nbsp; az ${o.az}° · h ${o.y}m · ${o.dh}m &nbsp;<em>(el ${Math.round(backendEl(o))}°)</em></span>`;
       const sel = document.createElement("button"); sel.textContent = "edit"; sel.className = "ghost";
-      sel.onclick = () => { active = i; syncControls(); renderList(); updateDrops(); };
+      sel.onclick = () => { active = i; syncControls(); renderList(); updateDrops(); refreshTrim(); };
       const del = document.createElement("button"); del.textContent = "×"; del.className = "ghost";
-      del.onclick = () => { if (objects.length > 1) { objects.splice(i, 1); active = 0; rebuildSpheres(); if (playing) buildVoices(); syncControls(); renderList(); } };
-      li.append(sel, del); ul.appendChild(li);
+      del.onclick = () => {
+        if (objects.length > 1) {
+          const oldVoice = voices[i];
+          if (oldVoice) {
+            try { oldVoice.src.stop(); } catch (e) {}
+            try { oldVoice.src.disconnect(); } catch (e) {}
+            try { oldVoice.panner.disconnect(); } catch (e) {}
+            try { oldVoice.gain.disconnect(); } catch (e) {}
+            voices.splice(i, 1);
+          }
+          objects.splice(i, 1); active = 0; rebuildSpheres();
+          syncControls(); renderList(); refreshTrim();
+        }
+      };
+      line1.append(sel, del);
+
+      const line2 = document.createElement("div");
+      const stimSel = document.createElement("select");
+      STIMS.forEach(s => {
+        const opt = document.createElement("option");
+        opt.value = s; opt.textContent = s; stimSel.appendChild(opt);
+      });
+      stimSel.value = o.stim;
+      stimSel.onchange = async () => {
+        objects[i].stim = stimSel.value;
+        objects[i].region = null;
+        rebuildSpheres();
+        renderList();
+        if (i === active) await refreshTrim();
+        if (playing) await rebuildVoice(i);
+      };
+      const vol = document.createElement("span");
+      vol.textContent = `vol ${Math.round(o.gain * 100)}%`;
+      line2.append(stimSel, vol);
+
+      li.append(line1, line2); ul.appendChild(li);
     });
   }
   function syncControls() {
@@ -256,6 +362,7 @@
     g("panner-az").value = o.az; g("az-val").textContent = o.az;
     g("panner-y").value = o.y; g("y-val").textContent = o.y.toFixed(1);
     g("panner-dist").value = o.dh; g("dist-val").textContent = o.dh;
+    g("panner-src-vol").value = o.gain; g("src-vol-val").textContent = o.gain.toFixed(2);
     const col = "#" + COLORS[active % COLORS.length].toString(16).padStart(6, "0");
     g("editing-src").innerHTML = `Editing source #${active + 1} <span class="dot" style="background:${col}"></span>`;
   }
@@ -266,16 +373,24 @@
   }
 
   // ---- WAV player (waveform + A/B loop region) ----
-  async function onStimChange() {
-    const kind = g("panner-stim").value;
-    if (kind.toLowerCase().endsWith(".wav")) {
-      try {
-        regionBuf = await loadWav(kind);
-        region = { a: 0, b: regionBuf.duration, dur: regionBuf.duration };
-        g("wav-player").classList.remove("hidden"); drawWave();
-      } catch (e) { g("wav-player").classList.add("hidden"); }
-    } else { g("wav-player").classList.add("hidden"); }
-    if (playing) await buildVoices();
+  async function refreshTrim() {
+    const requested = active;
+    const o = objects[requested];
+    if (!o || !o.stim.toLowerCase().endsWith(".wav")) {
+      regionBuf = null; region = { a: 0, b: 0, dur: 0 };
+      g("wav-player").classList.add("hidden");
+      return;
+    }
+    try {
+      const buf = await loadWav(o.stim);
+      if (requested !== active || objects[requested] !== o || o.stim.toLowerCase().endsWith(".wav") === false) return;
+      regionBuf = buf;
+      const r = o.region || [0, buf.duration];
+      region = { a: r[0], b: r[1], dur: buf.duration };
+      g("wav-player").classList.remove("hidden"); drawWave();
+    } catch (e) {
+      if (requested === active) g("wav-player").classList.add("hidden");
+    }
   }
 
   function drawWave() {
@@ -299,8 +414,12 @@
   function setHandle(which, t) {
     if (which === "a") region.a = Math.max(0, Math.min(t, region.b - 0.05));
     else region.b = Math.min(region.dur, Math.max(t, region.a + 0.05));
+    objects[active].region = [region.a, region.b];
     drawWave();
-    if (playing) voices.forEach(v => { v.src.loopStart = region.a; v.src.loopEnd = region.b; });
+    if (playing && voices[active]) {
+      voices[active].src.loopStart = region.a;
+      voices[active].src.loopEnd = region.b;
+    }
   }
 
   function initWaveCanvas() {
@@ -321,20 +440,29 @@
       const outs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "audiooutput");
       outs.forEach(d => { if (d.deviceId && d.deviceId !== "default") { const o = document.createElement("option"); o.value = d.deviceId; o.textContent = d.label || "output"; sel.appendChild(o); } });
     } catch (e) {}
-    let stims = ["pink pulse", "white pulse", "click", "pink cont", "white cont"];
     try {
       const wavs = (await (await fetch("/api/stimuli")).json()).filter(s => s.toLowerCase().endsWith(".wav"));
-      stims = stims.concat(wavs);
+      STIMS = STIMS.concat(wavs);
     } catch (e) {}
-    g("panner-stim").innerHTML = ""; stims.forEach(s => { const o = document.createElement("option"); o.value = s; o.textContent = s; g("panner-stim").appendChild(o); });
 
-    buildScene(); renderList(); syncControls(); initWaveCanvas();
+    buildScene(); renderList(); syncControls(); initWaveCanvas(); refreshTrim();
     g("panner-az").oninput = () => { objects[active].az = +g("panner-az").value; g("az-val").textContent = objects[active].az; applyPos(); };
     g("panner-y").oninput = () => { objects[active].y = +g("panner-y").value; g("y-val").textContent = objects[active].y.toFixed(1); applyPos(); };
     g("panner-dist").oninput = () => { objects[active].dh = +g("panner-dist").value; g("dist-val").textContent = objects[active].dh; applyPos(); };
-    g("panner-stim").onchange = onStimChange;
+    g("panner-src-vol").oninput = () => {
+      const v = +g("panner-src-vol").value;
+      objects[active].gain = v; g("src-vol-val").textContent = v.toFixed(2);
+      if (playing && voices[active]) voices[active].gain.gain.setTargetAtTime(v, actx.currentTime, 0.02);
+      renderList();
+    };
     g("panner-vol").oninput = () => { if (master) master.gain.value = +g("panner-vol").value; };
-    g("add-source").onclick = () => { objects.push({ az: 90, y: 0, dh: 1.4 }); active = objects.length - 1; rebuildSpheres(); if (playing) buildVoices(); syncControls(); renderList(); };
+    g("add-source").onclick = () => {
+      const current = objects[active];
+      objects.push({ az: 90, y: 0, dh: 1.4, stim: current.stim, region: null, gain: current.gain });
+      active = objects.length - 1; rebuildSpheres();
+      if (playing) rebuildVoice(active);
+      syncControls(); renderList(); refreshTrim();
+    };
     g("panner-play").onclick = async () => { playing = true; g("panner-stop").disabled = false; await startAudio(); };
     g("panner-stop").onclick = () => { playing = false; g("panner-stop").disabled = true; stopAudio(); };
   }

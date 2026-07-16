@@ -169,8 +169,20 @@ def band_noise(seed, lo_hz, hi_hz, dur_ms=500.0):
     return _raised_cosine_ramp(out, 10.0)
 
 
-def render_cmaa(ref_az, delta_deg, high_side, peak_dbfs, mode, seed):
-    """Render simultaneous low- and high-band sources separated in azimuth."""
+def _cmaa_token(kind, seed_for_side):
+    """Build one CMAA source token."""
+    if kind == "band-low":
+        return band_noise(seed_for_side, *CMAA_LOW)
+    if kind == "band-high":
+        return band_noise(seed_for_side, *CMAA_HIGH)
+    if kind.lower().endswith(".wav"):
+        return make_stimulus(kind, seed_for_side)
+    raise ValueError(f"Unknown CMAA stimulus '{kind}'.")
+
+
+def render_cmaa(ref_az, delta_deg, high_side, peak_dbfs, mode, seed,
+                stim_a="band-low", stim_b="band-high"):
+    """Render simultaneous, distinguishable sources separated in azimuth."""
     delta = float(delta_deg)
     side = int(high_side)
     if delta <= 0.0:
@@ -178,13 +190,19 @@ def render_cmaa(ref_az, delta_deg, high_side, peak_dbfs, mode, seed):
     if side not in (-1, 1):
         raise ValueError("high_side must be -1 or +1.")
 
-    low_az = float(ref_az) - side * delta / 2.0
-    high_az = float(ref_az) + side * delta / 2.0
-    low = band_noise(int(seed), *CMAA_LOW)
-    high = band_noise(int(seed) + 1, *CMAA_HIGH)
-    low_frame = render_output(low, low_az, 0.0, mode)
-    high_frame = render_output(high, high_az, 0.0, mode)
-    mixed = low_frame + high_frame
+    a_az = float(ref_az) - side * delta / 2.0
+    b_az = float(ref_az) + side * delta / 2.0
+    token_a = _cmaa_token(stim_a, int(seed))
+    token_b = _cmaa_token(stim_b, int(seed) + 1)
+
+    # Align both to the shorter token, capped at 1 s; re-ramp (slicing breaks ramps).
+    n = min(len(token_a), len(token_b), SR)
+    token_a = _raised_cosine_ramp(token_a[:n])
+    token_b = _raised_cosine_ramp(token_b[:n])
+
+    a_frame = render_output(token_a, a_az, 0.0, mode)
+    b_frame = render_output(token_b, b_az, 0.0, mode)
+    mixed = a_frame + b_frame
 
     peak = np.max(np.abs(mixed)) if mixed.size else 0.0
     if peak > 0.0:
@@ -455,6 +473,11 @@ def _selfcheck():
         info = wav_info(tmp_name)
         assert abs(info["duration"] - 2.0) < 1e-6
         assert len(info["peaks"]) == 600
+        # CMAA with a WAV source: 2ch out, aligned + capped at 1 s.
+        cmaa_wav = render_cmaa(0, 20, 1, -12.0, "folddown", 5,
+                               stim_a=tmp_name, stim_b="band-high")
+        assert cmaa_wav.shape[1] == 2
+        assert len(cmaa_wav) <= SR
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
