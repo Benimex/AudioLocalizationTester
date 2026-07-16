@@ -11,3 +11,4 @@ stimuli/*.wav
 
 # User-authored EQ profiles (same policy as stimuli -- folder stays, files stay out)
 eq/*.txt
+!eq/EXAMPLE.txt

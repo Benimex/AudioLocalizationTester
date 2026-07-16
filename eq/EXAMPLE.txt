@@ -1,0 +1,9 @@
+# Equalizer APO / AutoEq format. Lines that don't match are ignored (comments OK).
+# Preamp: negative headroom so boosts don't clip.
+# Filter types: PK = peaking, LSC/LS = low shelf, HSC/HS = high shelf.
+# Q optional (default 0.707). fc must be 0 < fc < 24000, Q > 0.
+Preamp: -6.0 dB
+Filter 1: ON LSC Fc 105 Hz Gain 4.0 dB Q 0.71
+Filter 2: ON PK Fc 1000 Hz Gain 6.0 dB Q 1.41
+Filter 3: ON PK Fc 3200 Hz Gain -3.5 dB Q 2.00
+Filter 4: ON HSC Fc 8000 Hz Gain -2.0 dB Q 0.71
