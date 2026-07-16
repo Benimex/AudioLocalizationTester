@@ -1055,23 +1055,38 @@ def compare():
     return jsonify({"columns": columns + pooled})
 
 
+# Per-mode raw-trial CSV: (fetcher, column list).
+_EXPORTERS = {
+    "practice": (db.get_trials, ["trial_index", "target_az", "response_az", "signed_error",
+                                 "abs_error", "front_back_confusion", "left_right_confusion",
+                                 "replay_count", "response_ms"]),
+    "cmaa": (db.get_cmaa_trials, ["trial_index", "delta", "high_side", "response_side",
+                                  "correct", "response_ms"]),
+    "abx": (db.get_abx_trials, ["trial_index", "x_is_a", "response_is_a", "correct",
+                                "response_ms"]),
+    "extern": (db.get_ext_trials, ["trial_index", "target_az", "rating", "response_ms"]),
+    "width": (db.get_width_trials, ["trial_index", "a_first", "chose_a", "response_ms"]),
+}
+_EXPORTERS["main"] = _EXPORTERS["practice"]
+
+
 @app.route("/api/export/<int:sid>")
 def export_csv(sid):
-    trials = db.get_trials(sid)
+    session = db.get_session(sid)
+    if not session:
+        return jsonify({"error": "not found"}), 404
+    fetcher, columns = _EXPORTERS.get(session["mode"], _EXPORTERS["main"])
     buffer = io.StringIO()
     writer = csv.writer(buffer)
-    columns = [
-        "trial_index", "target_az", "response_az", "signed_error", "abs_error",
-        "front_back_confusion", "left_right_confusion", "replay_count", "response_ms",
-    ]
     writer.writerow(columns)
-    for trial in trials:
+    for trial in fetcher(sid):
         writer.writerow([trial[column] for column in columns])
     return Response(
         buffer.getvalue(),
         mimetype="text/csv",
         headers={
-            "Content-Disposition": f"attachment; filename=session_{sid}.csv"
+            "Content-Disposition":
+                f"attachment; filename=session_{sid}_{session['mode']}.csv"
         },
     )
 

@@ -203,7 +203,8 @@ function renderCmaaReport(container, data) {
   summary.innerHTML = `<h3>Session #${s.id} — ${s.participant} / ${s.condition}</h3>
     <p><span class="big-num">${estimate.threshold.toFixed(1)}°</span> separation threshold</p>
     <p>CI ${estimate.ci_lo.toFixed(1)}°–${estimate.ci_hi.toFixed(1)}° · n=${data.n}</p>
-    <p class="hint">閾值越低代表能分辨越接近的兩個聲音, 分離度越好.</p>`;
+    <p class="hint">閾值越低代表能分辨越接近的兩個聲音, 分離度越好.</p>
+    <p><a href="/api/export/${s.id}">下載 CSV (原始逐題資料)</a></p>`;
   container.appendChild(summary);
   container.appendChild(metricBlock("QUEST staircase", cmaaStaircase(data),
     "每點是一題, 高度是當題角度差, 綠=答對紅=答錯; 線=收斂出的分離度閾值, 越低越好."));
@@ -308,7 +309,8 @@ function renderAbxReport(container, data) {
     <p>p = ${formatP(p)}</p>
     <p><b>${verdict}</b></p>
     <p class="hint">ABX 原理：先聽 A、B，再判斷未知的 X 與 A 或 B 相同；答對率顯著高於隨機猜測代表可辨識。</p>
-    <p class="hint">A: ${specText(specA)} vs B: ${specText(specB)}</p>`;
+    <p class="hint">A: ${specText(specA)} vs B: ${specText(specB)}</p>
+    <p><a href="/api/export/${s.id}">下載 CSV (原始逐題資料)</a></p>`;
   container.appendChild(summary);
   container.appendChild(metricBlock("逐題結果",
     trialSquares(data.trials, trial => trial.correct ? "#24934d" : "#d33b3b"),
@@ -328,7 +330,8 @@ function renderExtReport(container, data) {
   summary.innerHTML = `<h3>Session #${s.id} — ${s.participant} / ${s.condition}</h3>
     <p><span class="big-num">${data.mean_rating} / 5</span></p>
     <p>n=${data.n}</p>
-    <p class="hint">1=頭內，5=頭外，越高外化越好；主觀量表，與定位/ABX 的客觀對錯不同，報告時分開解讀。</p>`;
+    <p class="hint">1=頭內，5=頭外，越高外化越好；主觀量表，與定位/ABX 的客觀對錯不同，報告時分開解讀。</p>
+    <p><a href="/api/export/${s.id}">下載 CSV (原始逐題資料)</a></p>`;
   container.appendChild(summary);
   container.appendChild(metricBlock("評分分布", extHistogram(data.hist)));
 }
@@ -355,7 +358,8 @@ function renderWidthReport(container, data) {
     <p><span class="big-num">${data.k_a}/${data.n}</span> A 判定較寬</p>
     <p>p = ${formatP(p)} (two-sided)</p>
     <p><b>${verdict}</b></p>
-    <p class="hint">A: ${specText(specA)} vs B: ${specText(specB)}</p>`;
+    <p class="hint">A: ${specText(specA)} vs B: ${specText(specB)}</p>
+    <p><a href="/api/export/${s.id}">下載 CSV (原始逐題資料)</a></p>`;
   container.appendChild(summary);
   container.appendChild(metricBlock("逐題結果",
     trialSquares(data.trials, trial => trial.chose_a ? "#24934d" : "#999"),

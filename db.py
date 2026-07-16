@@ -4,7 +4,9 @@ import os
 import sqlite3
 from contextlib import contextmanager
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "localization.db")
+# LOCTEST_DB env var overrides the DB file -- acceptance tests point this at a temp path
+# so they never touch the real dataset.
+DB_PATH = os.environ.get("LOCTEST_DB") or os.path.join(os.path.dirname(__file__), "localization.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
