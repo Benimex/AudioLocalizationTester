@@ -4,9 +4,9 @@ import os
 import sqlite3
 from contextlib import contextmanager
 
-DB_PATH = os.environ.get("LOCTEST_DB") or os.path.join(
-    os.path.dirname(__file__), "localization.db"
-)
+import paths
+
+DB_PATH = os.environ.get("LOCTEST_DB") or paths.DB_PATH
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (

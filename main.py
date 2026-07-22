@@ -17,8 +17,9 @@ import cmaa
 import db
 import masked
 import metrics
+import paths
 
-app = Flask(__name__, static_folder="static", static_url_path="")
+app = Flask(__name__, static_folder=paths.STATIC_DIR, static_url_path="")
 OUTPUT_MODES = {"bed71", "folddown", "stereo"}
 
 
@@ -189,7 +190,7 @@ def _pref_result(trials):
 
 @app.route("/")
 def index():
-    return send_from_directory("static", "index.html")
+    return send_from_directory(paths.STATIC_DIR, "index.html")
 
 
 @app.route("/api/devices")
@@ -247,7 +248,7 @@ def wavinfo():
 
 @app.route("/stimuli/<path:name>")
 def stimuli_file(name):
-    return send_from_directory("stimuli", name)
+    return send_from_directory(paths.STIMULI_DIR, name)
 
 
 @app.route("/api/session", methods=["POST"])

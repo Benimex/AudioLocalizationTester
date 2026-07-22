@@ -7,8 +7,11 @@ import numpy as np
 import sounddevice as sd
 from scipy.signal import sosfilt
 
+import paths
+
 SR = 48000
-EQ_DIR = os.path.join(os.path.dirname(__file__), "eq")
+EQ_DIR = paths.EQ_DIR
+STIMULI_DIR = paths.STIMULI_DIR
 
 CH_INDEX = {
     "FL": 0, "FR": 1, "FC": 2, "LFE": 3,
@@ -591,7 +594,7 @@ def render_masked(has_target, masker_stim, masker_dbfs, target_stim,
 
 def load_wav(name):
     """Load a mono 48-kHz 16-bit PCM WAV from stimuli/."""
-    path = os.path.join(os.path.dirname(__file__), "stimuli", name)
+    path = os.path.join(STIMULI_DIR, name)
     with wave.open(path, "rb") as wav:
         if wav.getframerate() != SR:
             raise ValueError(
@@ -625,7 +628,7 @@ def wav_info(name):
 
 def list_stimuli():
     """Return WAV files available in stimuli/, plus built-in pink noise."""
-    directory = os.path.join(os.path.dirname(__file__), "stimuli")
+    directory = STIMULI_DIR
     wavs = []
     if os.path.isdir(directory):
         wavs = sorted(
