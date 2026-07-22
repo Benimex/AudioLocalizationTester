@@ -2,6 +2,10 @@
 
 as-of: 2026-07-17
 
+## 2026-07-23: stimuli WAV 進 repo (Ben 指示)
+- C4 Bomb Beeping SFX.wav + Walking Sound Effect.wav 上 GitHub (.gitignore 加兩條例外,
+  其餘 stimuli/*.wav 政策不變). repo 為 PUBLIC, 授權由 Ben 自確認.
+
 ## 2026-07-17 (三): EQ Editor 手動驗收過 + LP/HP filter
 - Ben 實測 EQ Editor: 拖點/試聽/存檔全 OK (前節 UNVERIFIED 手動項結案).
 - 加 LP/HP (Ben 要求): audio.py _biquad_sos RBJ LPF/HPF (gain 無作用, q 塑膝, 0.707 =
