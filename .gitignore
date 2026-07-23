@@ -8,6 +8,8 @@ localization.db
 
 # User-provided stimulus audio (licensing varies -- keep out of the repo; folder + README stay)
 stimuli/*.wav
+!stimuli/C4 Bomb Beeping SFX.wav
+!stimuli/Walking Sound Effect.wav
 
 # User-authored EQ profiles (same policy as stimuli -- folder stays, files stay out)
 eq/*.txt
