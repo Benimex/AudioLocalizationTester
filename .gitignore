@@ -14,3 +14,8 @@ stimuli/*.wav
 # User-authored EQ profiles (same policy as stimuli -- folder stays, files stay out)
 eq/*.txt
 !eq/EXAMPLE.txt
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
